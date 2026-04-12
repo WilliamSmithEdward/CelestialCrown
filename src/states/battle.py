@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 from typing import List
 
@@ -145,6 +146,81 @@ class BattleState(GameState):
         if complete:
             self._return_to_town(result=result, message="Mission complete.", apply_outcome=True)
 
+    @staticmethod
+    def _segment_intersection(p1, p2, p3, p4):
+        """Return the intersection point of segments p1→p2 and p3→p4, or None."""
+        x1, y1 = p1; x2, y2 = p2; x3, y3 = p3; x4, y4 = p4
+        denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+        if abs(denom) < 1e-9:
+            return None
+        t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
+        u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom
+        if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0:
+            return (x1 + t * (x2 - x1), y1 + t * (y2 - y1))
+        return None
+
+    @staticmethod
+    def _point_seg_dist(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> float:
+        """Minimum distance from point to segment."""
+        dx, dy = bx - ax, by - ay
+        seg_sq = dx * dx + dy * dy
+        if seg_sq < 1e-10:
+            return math.hypot(px - ax, py - ay)
+        t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / seg_sq))
+        return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+    def _render_threat_overlays(self, screen) -> None:
+        """Pulsing danger aura behind any site currently targeted by an enemy squad."""
+        pulse = int(50 + 28 * math.sin(self.mission.time_elapsed * 2.8))
+        enemy_targets = {
+            s.target_site_id
+            for s in self.mission.squads
+            if s.owner == 1 and not s.is_destroyed() and s.target_site_id
+        }
+        for site_id in enemy_targets:
+            site = self.mission.sites.get(site_id)
+            if site is None:
+                continue
+            r = 38
+            surf = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+            pygame.draw.circle(surf, (220, 55, 55, pulse), (r, r), r)
+            screen.blit(surf, (int(site.x) - r, int(site.y) - r))
+
+    def _render_intercept_forecast(self, screen) -> None:
+        """Yellow warning diamonds where a player and enemy squad path are forecast to cross."""
+        p_squads = [s for s in self.mission.squads if s.owner == 0 and not s.is_destroyed() and s.target_site_id]
+        e_squads = [s for s in self.mission.squads if s.owner == 1 and not s.is_destroyed() and s.target_site_id]
+        drawn: set = set()
+        for ps in p_squads:
+            ps_target = ps.target_site_id
+            if ps_target is None:
+                continue
+            pt = self.mission.sites.get(ps_target)
+            if pt is None:
+                continue
+            for es in e_squads:
+                es_target = es.target_site_id
+                if es_target is None:
+                    continue
+                et = self.mission.sites.get(es_target)
+                if et is None:
+                    continue
+                result = self._segment_intersection(
+                    (ps.x, ps.y), (pt.x, pt.y),
+                    (es.x, es.y), (et.x, et.y),
+                )
+                if result is None:
+                    continue
+                ix, iy = int(result[0]), int(result[1])
+                key = (ix // 24, iy // 24)
+                if key in drawn:
+                    continue
+                drawn.add(key)
+                size = 8
+                pts = [(ix, iy - size), (ix + size, iy), (ix, iy + size), (ix - size, iy)]
+                pygame.draw.polygon(screen, (255, 210, 50), pts)
+                pygame.draw.polygon(screen, (180, 130, 10), pts, 1)
+
     def render(self, screen) -> None:
         if not PYGAME_AVAILABLE:
             return
@@ -161,10 +237,25 @@ class BattleState(GameState):
             ("ore_field", "enemy_base"),
         ]
 
+        hot_lanes: set = set()
+        for squad in self.mission.squads:
+            if squad.owner != 1 or squad.is_destroyed() or squad.target_site_id is None:
+                continue
+            for a_id, b_id in lane_pairs:
+                if squad.target_site_id not in (a_id, b_id):
+                    continue
+                sa = self.mission.sites[a_id]
+                sb = self.mission.sites[b_id]
+                if self._point_seg_dist(squad.x, squad.y, sa.x, sa.y, sb.x, sb.y) < 80:
+                    hot_lanes.add((a_id, b_id))
+
         for a_id, b_id in lane_pairs:
             a = self.mission.sites[a_id]
             b = self.mission.sites[b_id]
-            pygame.draw.line(screen, (58, 70, 88), (int(a.x), int(a.y)), (int(b.x), int(b.y)), 2)
+            lane_color = (155, 64, 58) if (a_id, b_id) in hot_lanes else (58, 70, 88)
+            pygame.draw.line(screen, lane_color, (int(a.x), int(a.y)), (int(b.x), int(b.y)), 2)
+
+        self._render_threat_overlays(screen)
 
         site_ids = self._site_order()
         for idx, site_id in enumerate(site_ids):
@@ -204,15 +295,19 @@ class BattleState(GameState):
                     1,
                 )
 
+        self._render_intercept_forecast(screen)
+
         if self.title_font is not None:
             title = self.title_font.render("Strategic Battlefield", True, (233, 206, 146))
             screen.blit(title, (28, 20))
 
         if self.body_font is not None and self.small_font is not None:
+            pressure = self.mission.pressure_index
+            hud_color = (255, 100, 80) if pressure > 5 else (255, 200, 90) if pressure > 0 else (140, 225, 140)
             line1 = self.body_font.render(
-                f"Chapter {self.session.chapter} | Mission Income {self.mission.player_income} | Pressure {self.mission.pressure_index:.1f}",
+                f"Chapter {self.session.chapter} | Income {self.mission.player_income} | Pressure {pressure:.1f}",
                 True,
-                COLOR_WHITE,
+                hud_color,
             )
             line2 = self.small_font.render(self.status_message, True, (222, 214, 154))
             line3 = self.small_font.render("TAB: cycle squad | 1-6: order to site | R: recall | SPACE: pause | ESC: withdraw", True, (164, 184, 214))

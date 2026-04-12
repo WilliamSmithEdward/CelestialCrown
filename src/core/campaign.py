@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 import random
 
 from ..battle import CombatSystem
 from ..entities import Unit, UnitClass
-from ..strategy import Squad, SquadRole, create_default_mission
+from ..strategy import Squad, SquadRole, SquadTactic, create_default_mission
 from ..town import Facility, FacilityType, Town, TownManager
 
 
@@ -25,6 +25,17 @@ class BattleReport:
 
 
 @dataclass
+class SquadPlan:
+    """Persistent squad composition plan between missions."""
+
+    id: str
+    name: str
+    unit_ids: List[str] = field(default_factory=list)
+    role: SquadRole = SquadRole.ASSAULT
+    tactic: SquadTactic = SquadTactic.BALANCED
+
+
+@dataclass
 class CampaignSession:
     """Persistent run state shared across game states."""
 
@@ -35,28 +46,143 @@ class CampaignSession:
     battle_index: int = 1
     day: int = 1
     max_chapters: int = 5
+    squad_plans: List[SquadPlan] = field(default_factory=list)
     last_report: BattleReport | None = None
     game_over: bool = False
     victory: bool = False
 
+    def _sync_squad_plans(self) -> None:
+        """Keep squad plans aligned to living party units."""
+        alive_ids = {unit.id for unit in self.party if unit.is_alive}
+
+        for plan in self.squad_plans:
+            plan.unit_ids = [unit_id for unit_id in plan.unit_ids if unit_id in alive_ids]
+
+        assigned = {unit_id for plan in self.squad_plans for unit_id in plan.unit_ids}
+        unassigned = [unit.id for unit in self.party if unit.is_alive and unit.id not in assigned]
+
+        if not self.squad_plans and unassigned:
+            self.squad_plans = [
+                SquadPlan(id="sp_1", name="Vanguard", role=SquadRole.ASSAULT),
+                SquadPlan(id="sp_2", name="Wardens", role=SquadRole.DEFENSE),
+            ]
+
+        for unit_id in unassigned:
+            target_plan = min(self.squad_plans, key=lambda plan: len(plan.unit_ids))
+            target_plan.unit_ids.append(unit_id)
+
+        party_order = {unit.id: idx for idx, unit in enumerate(self.party)}
+        for plan in self.squad_plans:
+            plan.unit_ids.sort(key=lambda unit_id: party_order.get(unit_id, 9999))
+
+        while len(self.squad_plans) > 1 and len(self.squad_plans[-1].unit_ids) == 0:
+            self.squad_plans.pop()
+
+    def _get_unit_by_id(self, unit_id: str) -> Unit | None:
+        for unit in self.party:
+            if unit.id == unit_id and unit.is_alive:
+                return unit
+        return None
+
+    def cycle_squad_role(self, squad_plan_id: str) -> None:
+        """Cycle squad role for the chosen squad plan."""
+        roles = list(SquadRole)
+        for plan in self.squad_plans:
+            if plan.id == squad_plan_id:
+                idx = roles.index(plan.role)
+                plan.role = roles[(idx + 1) % len(roles)]
+                return
+
+    def cycle_squad_tactic(self, squad_plan_id: str) -> None:
+        """Cycle tactic preset for the chosen squad plan."""
+        tactics = list(SquadTactic)
+        for plan in self.squad_plans:
+            if plan.id == squad_plan_id:
+                idx = tactics.index(plan.tactic)
+                plan.tactic = tactics[(idx + 1) % len(tactics)]
+                return
+
+    def move_unit_to_plan(self, unit_id: str, target_plan_index: int) -> bool:
+        """Move a unit into a different squad plan by index."""
+        if not (0 <= target_plan_index < len(self.squad_plans)):
+            return False
+
+        source_plan = None
+        for plan in self.squad_plans:
+            if unit_id in plan.unit_ids:
+                source_plan = plan
+                break
+        if source_plan is None:
+            return False
+
+        if len(source_plan.unit_ids) <= 1:
+            return False
+
+        source_plan.unit_ids.remove(unit_id)
+        self.squad_plans[target_plan_index].unit_ids.append(unit_id)
+        self._sync_squad_plans()
+        return True
+
+    @staticmethod
+    def new_game() -> "CampaignSession":
+        """Create a fresh campaign with a starter town and party."""
+        town = Town(name="Asterhold", funds=5000, population=230, morale=55)
+        town.add_facility(Facility("tavern", "Wayfarer's Tavern", FacilityType.TAVERN))
+        town.add_facility(Facility("barracks", "Ironwatch Barracks", FacilityType.BARRACKS))
+        town.add_facility(Facility("treasury", "Sunvault Treasury", FacilityType.TREASURY))
+
+        party = [
+            Unit("p_knight", "Aldric", UnitClass.KNIGHT, level=1),
+            Unit("p_mage", "Serin", UnitClass.MAGE, level=1),
+            Unit("p_archer", "Nyra", UnitClass.ARCHER, level=1),
+        ]
+        for unit in party:
+            unit.team = 0
+
+        session = CampaignSession(town=town, town_manager=TownManager(town), party=party)
+        session._sync_squad_plans()
+        return session
+
+    def generate_enemy_party(self) -> List[Unit]:
+        """Create an enemy squad scaled by chapter and battle progress."""
+        base_level = min(1 + self.chapter + (self.battle_index // 2), 12)
+        size = min(2 + self.chapter, 6)
+
+        enemy_classes = [
+            UnitClass.KNIGHT,
+            UnitClass.MAGE,
+            UnitClass.ARCHER,
+            UnitClass.CLERIC,
+            UnitClass.ROGUE,
+        ]
+        enemies: List[Unit] = []
+        for i in range(size):
+            unit_class = random.choice(enemy_classes)
+            enemy = Unit(f"e_{self.chapter}_{self.battle_index}_{i}", f"Raider {i + 1}", unit_class, level=base_level)
+            enemy.team = 1
+            enemies.append(enemy)
+        return enemies
+
     def build_player_squads(self) -> List[Squad]:
-        """Build player squads from current party composition."""
-        alive_party = [unit for unit in self.party if unit.is_alive]
-        if not alive_party:
+        """Build player squads from persistent squad plans."""
+        self._sync_squad_plans()
+        if not self.squad_plans:
             return []
 
         squads: List[Squad] = []
-        squad_size = 3
-        for i in range(0, len(alive_party), squad_size):
-            chunk = alive_party[i : i + squad_size]
-            role = SquadRole.ASSAULT if (i // squad_size) % 2 == 0 else SquadRole.DEFENSE
+        for i, plan in enumerate(self.squad_plans):
+            chunk = [unit for unit_id in plan.unit_ids if (unit := self._get_unit_by_id(unit_id)) is not None]
+            if not chunk:
+                continue
+
             squads.append(
                 Squad(
-                    id=f"a_{(i // squad_size) + 1}",
-                    name=f"Squad {(i // squad_size) + 1}",
+                    id=f"a_{i + 1}",
+                    name=plan.name,
                     units=chunk,
                     owner=0,
-                    role=role,
+                    role=plan.role,
+                    tactic=plan.tactic,
                 )
             )
         return squads
@@ -90,6 +216,7 @@ class CampaignSession:
         alive_party = [unit for unit in self.party if unit.is_alive]
         party_losses = len(self.party) - len(alive_party)
         self.party = alive_party
+        self._sync_squad_plans()
 
         funds_reward = 0
         exp_reward = 0
@@ -130,44 +257,6 @@ class CampaignSession:
         self.last_report = report
         return report
 
-    @staticmethod
-    def new_game() -> "CampaignSession":
-        """Create a fresh campaign with a starter town and party."""
-        town = Town(name="Asterhold", funds=5000, population=230, morale=55)
-        town.add_facility(Facility("tavern", "Wayfarer's Tavern", FacilityType.TAVERN))
-        town.add_facility(Facility("barracks", "Ironwatch Barracks", FacilityType.BARRACKS))
-        town.add_facility(Facility("treasury", "Sunvault Treasury", FacilityType.TREASURY))
-
-        party = [
-            Unit("p_knight", "Aldric", UnitClass.KNIGHT, level=1),
-            Unit("p_mage", "Serin", UnitClass.MAGE, level=1),
-            Unit("p_archer", "Nyra", UnitClass.ARCHER, level=1),
-        ]
-        for unit in party:
-            unit.team = 0
-
-        return CampaignSession(town=town, town_manager=TownManager(town), party=party)
-
-    def generate_enemy_party(self) -> List[Unit]:
-        """Create an enemy squad scaled by chapter and battle progress."""
-        base_level = min(1 + self.chapter + (self.battle_index // 2), 12)
-        size = min(2 + self.chapter, 6)
-
-        enemy_classes = [
-            UnitClass.KNIGHT,
-            UnitClass.MAGE,
-            UnitClass.ARCHER,
-            UnitClass.CLERIC,
-            UnitClass.ROGUE,
-        ]
-        enemies: List[Unit] = []
-        for i in range(size):
-            unit_class = random.choice(enemy_classes)
-            enemy = Unit(f"e_{self.chapter}_{self.battle_index}_{i}", f"Raider {i + 1}", unit_class, level=base_level)
-            enemy.team = 1
-            enemies.append(enemy)
-        return enemies
-
     def recruit_unit(self) -> bool:
         """Recruit a random class unit if town has enough funds."""
         recruit_cost = 1200
@@ -180,6 +269,7 @@ class CampaignSession:
         recruit = Unit(recruit_id, f"Recruit {len(self.party) + 1}", chosen_class, level=max(1, self.chapter - 1))
         recruit.team = 0
         self.party.append(recruit)
+        self._sync_squad_plans()
         return True
 
     def rest_party(self) -> None:
@@ -191,7 +281,8 @@ class CampaignSession:
 
     def remove_dead_units(self) -> None:
         """Permanently remove dead units from the party."""
-        self.party = [u for u in self.party if u.is_alive]
+        self.party = [unit for unit in self.party if unit.is_alive]
+        self._sync_squad_plans()
 
     def resolve_current_battle(self) -> BattleReport:
         """Auto-resolve one battle and apply rewards/consequences."""
@@ -199,9 +290,9 @@ class CampaignSession:
         enemies = self.generate_enemy_party()
         rounds = 0
 
-        while any(u.is_alive for u in self.party) and any(e.is_alive for e in enemies):
+        while any(unit.is_alive for unit in self.party) and any(enemy.is_alive for enemy in enemies):
             rounds += 1
-            all_units = [u for u in self.party if u.is_alive] + [e for e in enemies if e.is_alive]
+            all_units = [unit for unit in self.party if unit.is_alive] + [enemy for enemy in enemies if enemy.is_alive]
             all_units.sort(key=lambda unit: unit.stats.agl, reverse=True)
 
             for actor in all_units:
@@ -224,8 +315,8 @@ class CampaignSession:
             if rounds >= 40:
                 break
 
-        alive_party = [u for u in self.party if u.is_alive]
-        alive_enemies = [e for e in enemies if e.is_alive]
+        alive_party = [unit for unit in self.party if unit.is_alive]
+        alive_enemies = [enemy for enemy in enemies if enemy.is_alive]
         party_losses = len(self.party) - len(alive_party)
         enemies_defeated = len(enemies) - len(alive_enemies)
 

@@ -45,3 +45,40 @@ def test_game_over_when_party_eliminated() -> None:
     session.remove_dead_units()
 
     assert len(session.party) == 0
+
+
+def test_new_game_creates_squad_plans() -> None:
+    session = CampaignSession.new_game()
+
+    assert len(session.squad_plans) >= 1
+    assigned = sum(len(plan.unit_ids) for plan in session.squad_plans)
+    assert assigned == len(session.party)
+
+
+def test_move_unit_to_another_plan() -> None:
+    session = CampaignSession.new_game()
+
+    # Ensure we have at least two plans for this move test.
+    if len(session.squad_plans) < 2:
+        session.squad_plans.append(type(session.squad_plans[0])(id="sp_2", name="Reserve"))
+        session._sync_squad_plans()
+
+    source = session.squad_plans[0]
+    unit_id = source.unit_ids[0]
+    moved = session.move_unit_to_plan(unit_id, 1)
+
+    assert moved is True
+    assert unit_id in session.squad_plans[1].unit_ids
+
+
+def test_cycle_role_and_tactic() -> None:
+    session = CampaignSession.new_game()
+    plan = session.squad_plans[0]
+
+    old_role = plan.role
+    old_tactic = plan.tactic
+    session.cycle_squad_role(plan.id)
+    session.cycle_squad_tactic(plan.id)
+
+    assert plan.role != old_role
+    assert plan.tactic != old_tactic

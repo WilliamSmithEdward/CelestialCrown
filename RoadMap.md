@@ -27,7 +27,7 @@ This roadmap turns the project philosophy into a practical delivery plan for a f
 Make the strategic loop consistently fun and readable for repeated missions.
 
 ### Deliverables
-- Dedicated squad management screen.
+- [x] Dedicated squad management screen (initial playable implementation).
 - Squad formation editor (front/back row abstraction).
 - Leader assignment and squad tactic presets.
 - Order queue basics (primary target + fallback).
@@ -49,7 +49,7 @@ Increase map-control depth and make multi-front pressure feel intentional.
 - Terrain modifiers (movement speed, route risk, and tactical affinity).
 - Site rule expansion (towns, forts, temples, resources with unique strategic effects).
 - Reinforcement and recovery range tied to controlled sites.
-- Intercept prediction indicators and threat overlays.
+- [x] Intercept prediction indicators and threat overlays.
 - Pause-time command planning improvements.
 
 ### Acceptance Criteria
@@ -154,6 +154,6 @@ Each milestone is considered complete when:
 ## Immediate Next Slice
 
 Recommended immediate next implementation slice:
-1. Build dedicated squad management UI (formation + roles + leader + tactic).
-2. Add map threat overlay and intercept forecast.
-3. Replace hard-coded mission setup with first data-loaded mission definition.
+1. Add map threat overlay and intercept forecast.
+2. Replace hard-coded mission setup with first data-loaded mission definition.
+3. Expand squad management with leader assignment and row formation rules.

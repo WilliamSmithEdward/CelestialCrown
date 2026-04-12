@@ -27,6 +27,7 @@ class TownState(GameState):
                 "Town Command",
                 [
                     "Deploy to Strategic Map",
+                    "Manage Squads",
                     "Recruit Unit (1200g)",
                     "Upgrade Facility (1500g)",
                     "Rest Party",
@@ -75,21 +76,26 @@ class TownState(GameState):
             if self.engine is not None:
                 self.engine.change_state(BattleState(session=self.session))
         elif result == 1:
+            from .squad_management import SquadManagementState
+
+            if self.engine is not None:
+                self.engine.change_state(SquadManagementState(session=self.session))
+        elif result == 2:
             if self.session.recruit_unit():
                 self.status_message = "A new mercenary joined your banner."
             else:
                 self.status_message = "Not enough funds to recruit."
-        elif result == 2:
+        elif result == 3:
             upgraded = False
             for facility in self.session.town.facilities.values():
                 if facility.level < 5 and self.session.town.spend_funds(1500):
                     upgraded = facility.upgrade()
                     break
             self.status_message = "Facility upgraded." if upgraded else "Cannot upgrade any facility right now."
-        elif result == 3:
+        elif result == 4:
             self.session.rest_party()
             self.status_message = "Party fully rested."
-        elif result == 4:
+        elif result == 5:
             from .main_menu import MainMenuState
 
             if self.engine is not None:
