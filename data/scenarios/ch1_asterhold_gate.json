@@ -1,0 +1,41 @@
+{
+  "id": "ch1_asterhold_gate",
+  "title": "The Asterhold Gate",
+  "chapter": 1,
+  "map": {
+    "width": 1280,
+    "height": 720,
+    "terrain_seed": 42,
+    "terrain_features": [
+      { "type": "river", "points": [[180, 60], [260, 160], [310, 300], [380, 420], [460, 520], [560, 640], [680, 720]] },
+      { "type": "road",  "points": [[120, 360], [300, 280], [520, 360], [740, 280], [1030, 360]] },
+      { "type": "road",  "points": [[520, 360], [860, 500], [1030, 360]] },
+      { "type": "highland", "rect": [0, 0, 400, 180] },
+      { "type": "highland", "rect": [900, 0, 380, 200] },
+      { "type": "forest", "center": [660, 540], "radius": 110 }
+    ]
+  },
+  "sites": [
+    { "id": "player_base",  "name": "Asterhold Gate", "type": "BASE",     "x": 120,  "y": 360, "owner": 0, "value": 160, "sprite": "base_allied" },
+    { "id": "west_town",    "name": "Lowmarket",       "type": "TOWN",     "x": 300,  "y": 280, "owner": -1,"value": 90,  "sprite": "town_small"  },
+    { "id": "center_fort",  "name": "Rookspire",        "type": "FORT",     "x": 520,  "y": 360, "owner": -1,"value": 120, "sprite": "fort_stone"  },
+    { "id": "east_temple",  "name": "Sky Chapel",       "type": "TEMPLE",   "x": 740,  "y": 280, "owner": -1,"value": 100, "sprite": "temple_sky"  },
+    { "id": "ore_field",    "name": "Iron Vein",         "type": "RESOURCE", "x": 860,  "y": 500, "owner": 1, "value": 110, "sprite": "resource_ore"},
+    { "id": "enemy_base",   "name": "Dread Bastion",    "type": "BASE",     "x": 1030, "y": 360, "owner": 1, "value": 170, "sprite": "base_enemy"  }
+  ],
+  "lanes": [
+    ["player_base", "west_town"],
+    ["west_town",   "center_fort"],
+    ["center_fort", "east_temple"],
+    ["east_temple", "enemy_base"],
+    ["center_fort", "ore_field"],
+    ["ore_field",   "enemy_base"]
+  ],
+  "enemy_squads": [
+    { "id": "e_1", "name": "Legion 1", "role": "ASSAULT",  "x": 1030, "y": 340, "speed": 110 },
+    { "id": "e_2", "name": "Legion 2", "role": "HUNTER",   "x": 1010, "y": 400, "speed": 118 }
+  ],
+  "music": null,
+  "victory_condition": "capture_enemy_base",
+  "defeat_condition":  "lose_player_base"
+}

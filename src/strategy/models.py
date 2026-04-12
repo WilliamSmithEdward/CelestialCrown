@@ -52,6 +52,7 @@ class StrategicSite:
     owner: int = -1  # -1 neutral, 0 player, 1 enemy
     value: int = 100
     capture_progress: float = 0.0
+    sprite: Optional[str] = None  # sprite key for renderer
 
 
 @dataclass
@@ -97,6 +98,7 @@ class StrategicMission:
 
     sites: Dict[str, StrategicSite]
     squads: List[Squad]
+    lanes: List[List[str]] = field(default_factory=list)
     time_elapsed: float = 0.0
     player_income: int = 0
     enemy_income: int = 0
@@ -277,7 +279,15 @@ def create_default_mission(chapter: int = 1) -> StrategicMission:
             )
         )
 
-    return StrategicMission(sites=sites, squads=allied_squads + enemy_squads)
+    default_lanes = [
+        ["player_base", "west_town"],
+        ["west_town", "center_fort"],
+        ["center_fort", "east_temple"],
+        ["east_temple", "enemy_base"],
+        ["center_fort", "ore_field"],
+        ["ore_field", "enemy_base"],
+    ]
+    return StrategicMission(sites=sites, squads=allied_squads + enemy_squads, lanes=default_lanes)
 
 
 def _resolve_engagement(squad_a: Squad, squad_b: Squad) -> EngagementReport:

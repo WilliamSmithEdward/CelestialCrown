@@ -1,17 +1,18 @@
 """Main entry point for Celestial Crown"""
 
 from src.core.gameengine import GameEngine
-from src.states import MainMenuState
+from src.core.campaign import CampaignSession
+from src.states import MainMenuState, BattleState
 
 
 def main():
     """Initialize and run the game"""
     try:
         engine = GameEngine()
-        
-        # Start with main menu
-        main_menu = MainMenuState()
-        engine.change_state(main_menu)
+
+        # DEV: drop straight into the battle map to test threat overlays
+        session = CampaignSession.new_game()
+        engine.change_state(BattleState(session=session))
         
         # Run game loop
         engine.run()

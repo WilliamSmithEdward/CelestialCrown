@@ -50,6 +50,8 @@ Increase map-control depth and make multi-front pressure feel intentional.
 - Site rule expansion (towns, forts, temples, resources with unique strategic effects).
 - Reinforcement and recovery range tied to controlled sites.
 - [x] Intercept prediction indicators and threat overlays.
+- [x] Procedural terrain background with ISO building sprites and squad tokens.
+- Top-down camera mode (toggle from isometric view, unlocked in Phase 2).
 - Pause-time command planning improvements.
 
 ### Acceptance Criteria

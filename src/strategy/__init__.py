@@ -10,6 +10,7 @@ from .models import (
     StrategicSite,
     create_default_mission,
 )
+from .mission_loader import load_mission
 
 __all__ = [
     "EngagementReport",
@@ -20,4 +21,5 @@ __all__ = [
     "StrategicMission",
     "StrategicSite",
     "create_default_mission",
+    "load_mission",
 ]
