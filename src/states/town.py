@@ -26,7 +26,7 @@ class TownState(GameState):
             self.menu = Menu(
                 "Town Command",
                 [
-                    "Deploy to Battle",
+                    "Deploy to Strategic Map",
                     "Recruit Unit (1200g)",
                     "Upgrade Facility (1500g)",
                     "Rest Party",
@@ -41,8 +41,6 @@ class TownState(GameState):
             self.menu.button_height = 64
             self.menu.button_spacing = 74
             for button in self.menu.buttons:
-                button.width = 360
-                button.height = 64
                 button.rect.width = 360
                 button.rect.height = 64
         else:
@@ -113,7 +111,7 @@ class TownState(GameState):
             title = self.title_font.render("Asterhold Command", True, (233, 213, 170))
             screen.blit(title, (60, 40))
 
-        if self.body_font is not None:
+        if self.body_font is not None and self.small_font is not None:
             if self.session.game_over:
                 final_text = "Campaign Complete" if self.session.victory else "Campaign Defeat"
                 final_color = (128, 226, 148) if self.session.victory else (230, 112, 112)

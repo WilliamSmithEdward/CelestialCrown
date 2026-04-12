@@ -89,15 +89,20 @@ class GameEngine:
         # Keep window centered when using windowed mode.
         os.environ.setdefault("SDL_VIDEO_CENTERED", "1")
         pygame.init()
-        self.use_vsync = True
+        video_driver = os.environ.get("SDL_VIDEODRIVER", "").lower()
+        self.use_vsync = video_driver != "dummy"
         self.target_fps = FPS
         monitor_refresh = self._get_monitor_refresh_rate()
         self.aspect_ratio = SCREEN_WIDTH / SCREEN_HEIGHT
 
         if DISPLAY_MODE == "fullscreen":
-            try:
-                self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.FULLSCREEN, vsync=1)
-            except TypeError:
+            if self.use_vsync:
+                try:
+                    self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.FULLSCREEN, vsync=1)
+                except TypeError:
+                    self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.FULLSCREEN)
+                    self.use_vsync = False
+            else:
                 self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.FULLSCREEN)
         else:
             # Use desktop bounds so the window is not cut off by the taskbar.
@@ -118,9 +123,13 @@ class GameEngine:
                 window_h = int(window_w / self.aspect_ratio)
 
             # RESIZABLE keeps the standard OS title bar (minimize/maximize/close).
-            try:
-                self.screen = pygame.display.set_mode((window_w, window_h), pygame.RESIZABLE, vsync=1)
-            except TypeError:
+            if self.use_vsync:
+                try:
+                    self.screen = pygame.display.set_mode((window_w, window_h), pygame.RESIZABLE, vsync=1)
+                except TypeError:
+                    self.screen = pygame.display.set_mode((window_w, window_h), pygame.RESIZABLE)
+                    self.use_vsync = False
+            else:
                 self.screen = pygame.display.set_mode((window_w, window_h), pygame.RESIZABLE)
 
             # In windowed mode, pace updates to monitor refresh when known.
@@ -135,6 +144,12 @@ class GameEngine:
         self.controller_device_added_event = getattr(pygame, "CONTROLLERDEVICEADDED", None)
         self.controller_device_removed_event = getattr(pygame, "CONTROLLERDEVICEREMOVED", None)
         self._init_controllers()
+
+        pacing_label = "vsync" if self.use_vsync else f"{self.target_fps} fps cap"
+        print(
+            f"[Display] mode={DISPLAY_MODE} driver={video_driver or 'default'} "
+            f"vsync={'on' if self.use_vsync else 'off'} pacing={pacing_label}"
+        )
         
         # State management
         self.current_state: Optional[GameState] = None

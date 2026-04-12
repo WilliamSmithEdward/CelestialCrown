@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List
 import random
 
 from ..battle import CombatSystem
 from ..entities import Unit, UnitClass
+from ..strategy import Squad, SquadRole, create_default_mission
 from ..town import Facility, FacilityType, Town, TownManager
 
 
@@ -37,6 +38,97 @@ class CampaignSession:
     last_report: BattleReport | None = None
     game_over: bool = False
     victory: bool = False
+
+    def build_player_squads(self) -> List[Squad]:
+        """Build player squads from current party composition."""
+        alive_party = [unit for unit in self.party if unit.is_alive]
+        if not alive_party:
+            return []
+
+        squads: List[Squad] = []
+        squad_size = 3
+        for i in range(0, len(alive_party), squad_size):
+            chunk = alive_party[i : i + squad_size]
+            role = SquadRole.ASSAULT if (i // squad_size) % 2 == 0 else SquadRole.DEFENSE
+            squads.append(
+                Squad(
+                    id=f"a_{(i // squad_size) + 1}",
+                    name=f"Squad {(i // squad_size) + 1}",
+                    units=chunk,
+                    owner=0,
+                    role=role,
+                )
+            )
+        return squads
+
+    def create_strategic_mission(self):
+        """Create a strategic mission and inject current squads/units into it."""
+        mission = create_default_mission(self.chapter)
+        allied_templates = [squad for squad in mission.squads if squad.owner == 0]
+        enemy_templates = [squad for squad in mission.squads if squad.owner == 1]
+        player_squads = self.build_player_squads()
+
+        for idx, squad in enumerate(player_squads):
+            template = allied_templates[min(idx, len(allied_templates) - 1)]
+            squad.x = template.x + (idx * 18)
+            squad.y = template.y + (idx * 22)
+            squad.speed = template.speed
+            squad.target_site_id = "center_fort"
+
+        if player_squads:
+            mission.squads = player_squads + enemy_templates
+
+        for enemy in enemy_templates:
+            if not enemy.units:
+                enemy.units = self.generate_enemy_party()
+            enemy.target_site_id = random.choice(["center_fort", "west_town", "player_base"])
+
+        return mission
+
+    def apply_mission_outcome(self, result: str, income_bonus: int = 0) -> BattleReport:
+        """Apply strategic mission result to campaign progression."""
+        alive_party = [unit for unit in self.party if unit.is_alive]
+        party_losses = len(self.party) - len(alive_party)
+        self.party = alive_party
+
+        funds_reward = 0
+        exp_reward = 0
+        enemies_defeated = max(0, 2 + self.chapter + (self.battle_index - 1))
+        rounds = max(1, self.day)
+
+        if result == "victory":
+            funds_reward = 900 + self.chapter * 180 + income_bonus
+            exp_reward = 45 + self.chapter * 12
+            self.town_manager.add_funds(funds_reward)
+            for unit in self.party:
+                unit.gain_exp(exp_reward)
+
+            self.battle_index += 1
+            if self.battle_index > 3:
+                self.battle_index = 1
+                self.chapter += 1
+
+            if self.chapter > self.max_chapters:
+                self.victory = True
+                self.game_over = True
+        else:
+            self.town_manager.adjust_morale(-12)
+            if len(self.party) == 0:
+                self.game_over = True
+
+        self.day += 1
+        self.town_manager.next_turn()
+
+        report = BattleReport(
+            victory=result == "victory",
+            rounds=rounds,
+            enemies_defeated=enemies_defeated,
+            party_losses=party_losses,
+            funds_reward=funds_reward,
+            exp_reward=exp_reward,
+        )
+        self.last_report = report
+        return report
 
     @staticmethod
     def new_game() -> "CampaignSession":
