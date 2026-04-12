@@ -1,8 +1,11 @@
 """Town and facility models."""
 
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class FacilityType(Enum):
@@ -32,7 +35,9 @@ class Facility:
         if self.level < 5:
             self.level += 1
             self.upgrade_cost = int(self.upgrade_cost * 1.5)
+            logger.info(f"Facility {self.id} upgraded to level {self.level}")
             return True
+        logger.warning(f"Facility {self.id} already at max level")
         return False
 
 
@@ -49,6 +54,7 @@ class Town:
     def add_facility(self, facility: Facility) -> None:
         """Build a new facility."""
         self.facilities[facility.id] = facility
+        logger.info(f"Facility {facility.name} ({facility.id}) built in {self.name}")
 
     def get_facility(self, facility_id: str) -> Optional[Facility]:
         """Get facility by ID."""
@@ -73,19 +79,3 @@ class Town:
         """Get cost multiplier based on morale."""
         return 0.5 + (self.morale / 100.0)
 
-
-class TownManager:
-    """Manages town activities and state."""
-
-    def __init__(self, town: Town):
-        self.town = town
-        self.income_per_turn = 500
-
-    def next_turn(self) -> None:
-        """Handle turn progression."""
-        self.town.add_funds(self.income_per_turn)
-
-        if self.town.morale < 50:
-            self.town.change_morale(1)
-        elif self.town.morale > 50:
-            self.town.change_morale(-1)

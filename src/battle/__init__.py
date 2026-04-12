@@ -1,6 +1,8 @@
 """Battle package exports."""
 
-from .systems import Action, ActionType, BattleGrid, BattleState, CombatSystem
+from .combat import Action, ActionType, CombatSystem
+from .grid import BattleGrid
+from .systems import BattleState
 
 __all__ = [
     "Action",

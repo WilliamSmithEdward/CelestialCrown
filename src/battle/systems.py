@@ -1,125 +1,14 @@
-"""Battle systems: turn order, grid operations, and combat calculations."""
+"""Battle state management: turn order and overall battle flow."""
 
-from dataclasses import dataclass, field
-from enum import Enum
-import random
+import logging
 from typing import List, Optional, Tuple
 
 from ..entities import Unit
+from ..exceptions import BattleError
+from .grid import BattleGrid
+from .combat import Action, ActionType
 
-
-class ActionType(Enum):
-    """Types of actions units can take in battle."""
-
-    ATTACK = "attack"
-    MAGIC = "magic"
-    SKILL = "skill"
-    DEFEND = "defend"
-    ITEM = "item"
-    WAIT = "wait"
-
-
-@dataclass
-class Action:
-    """Represents a unit's action in combat."""
-
-    actor: Unit
-    action_type: ActionType
-    target: Optional[Unit] = None
-    targets: List[Unit] = field(default_factory=list)
-    power: int = 0
-
-
-class BattleGrid:
-    """Grid-based battle map."""
-
-    def __init__(self, width: int, height: int):
-        self.width = width
-        self.height = height
-        self.tiles: List[List[Optional[str]]] = [
-            [None for _ in range(width)] for _ in range(height)
-        ]
-        self.units: dict[str, Unit] = {}
-
-    def place_unit(self, unit: Unit, x: int, y: int) -> bool:
-        """Place a unit at coordinates, return success."""
-        if self._is_valid_position(x, y) and self.tiles[y][x] is None:
-            unit.position_x = x
-            unit.position_y = y
-            self.tiles[y][x] = unit.id
-            self.units[unit.id] = unit
-            return True
-        return False
-
-    def move_unit(self, unit: Unit, x: int, y: int) -> bool:
-        """Move a unit to new coordinates."""
-        if not self._is_valid_position(x, y):
-            return False
-
-        self.tiles[unit.position_y][unit.position_x] = None
-        unit.position_x = x
-        unit.position_y = y
-        self.tiles[y][x] = unit.id
-        return True
-
-    def get_adjacent_positions(self, x: int, y: int) -> List[Tuple[int, int]]:
-        """Get valid adjacent positions (cardinal only)."""
-        positions = []
-        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            nx, ny = x + dx, y + dy
-            if self._is_valid_position(nx, ny):
-                positions.append((nx, ny))
-        return positions
-
-    def get_unit_at(self, x: int, y: int) -> Optional[Unit]:
-        """Get unit at position."""
-        if self._is_valid_position(x, y):
-            unit_id = self.tiles[y][x]
-            return self.units.get(unit_id) if unit_id else None
-        return None
-
-    def _is_valid_position(self, x: int, y: int) -> bool:
-        """Check if position is within grid bounds."""
-        return 0 <= x < self.width and 0 <= y < self.height
-
-    def get_distance(self, x1: int, y1: int, x2: int, y2: int) -> int:
-        """Manhattan distance between positions."""
-        return abs(x1 - x2) + abs(y1 - y2)
-
-
-class CombatSystem:
-    """Handles combat calculations and mechanics."""
-
-    @staticmethod
-    def calculate_damage(attacker: Unit, defender: Unit) -> int:
-        """Calculate damage based on attacker and defender stats."""
-        base_damage = attacker.stats.str + random.randint(-5, 10)
-        defense_reduction = defender.stats.def_ // 2
-        return max(1, base_damage - defense_reduction)
-
-    @staticmethod
-    def calculate_hit_chance(attacker: Unit, defender: Unit) -> float:
-        """Calculate hit probability (0.0 to 1.0)."""
-        base_hit = 0.85
-        agl_difference = (attacker.stats.agl - defender.stats.agl) / 100.0
-        return max(0.3, min(0.95, base_hit + agl_difference))
-
-    @staticmethod
-    def calculate_critical_chance(attacker: Unit) -> float:
-        """Calculate critical hit probability."""
-        return (attacker.stats.agl / 100.0) * 0.3
-
-    @staticmethod
-    def execute_attack(attacker: Unit, defender: Unit) -> Tuple[int, bool, bool]:
-        """Execute an attack, return (damage, hit, critical)."""
-        if random.random() > CombatSystem.calculate_hit_chance(attacker, defender):
-            return 0, False, False
-
-        is_critical = random.random() < CombatSystem.calculate_critical_chance(attacker)
-        damage = CombatSystem.calculate_damage(attacker, defender)
-        if is_critical:
-            damage = int(damage * 1.5)
-        return damage, True, is_critical
+logger = logging.getLogger(__name__)
 
 
 class BattleState:
@@ -137,6 +26,7 @@ class BattleState:
         self.actions_queue: List[Action] = []
 
         self._calculate_turn_order()
+        logger.info(f"Battle initialized: {len(player_units)} players vs {len(enemy_units)} enemies")
 
     def _calculate_turn_order(self) -> None:
         """Calculate turn order based on agility."""
@@ -161,6 +51,7 @@ class BattleState:
         for unit in self.all_units:
             if unit.is_alive:
                 unit.reset_turn()
+        logger.info(f"Round {self.round_number} started")
 
     def is_battle_over(self) -> Tuple[bool, str]:
         """Check if battle is finished, return (is_over, winner)."""
@@ -168,7 +59,9 @@ class BattleState:
         enemies_alive = any(u.is_alive for u in self.enemy_units)
 
         if not player_alive:
+            logger.info("Battle over: DEFEAT")
             return True, "DEFEAT"
         if not enemies_alive:
+            logger.info("Battle over: VICTORY")
             return True, "VICTORY"
         return False, ""

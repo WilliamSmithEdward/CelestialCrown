@@ -1,10 +1,14 @@
 """Entity models for units, stats, and progression."""
 
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional
 
-from ..config import LEVEL_MAX, LEVEL_MIN, STAT_MAX, STAT_MIN
+from ..config import LEVEL_MAX, LEVEL_MIN
+from .stats import Stats
+
+logger = logging.getLogger(__name__)
 
 
 class UnitClass(Enum):
@@ -23,27 +27,6 @@ class Alignment(Enum):
     LAW = 100
     NEUTRAL = 0
     CHAOS = -100
-
-
-@dataclass
-class Stats:
-    """Character base statistics."""
-
-    hp: int = 30
-    str: int = 10
-    def_: int = 10
-    agl: int = 10
-    int_: int = 10
-    wil: int = 10
-
-    def clamp(self) -> None:
-        """Ensure all stats are within valid range."""
-        self.hp = max(STAT_MIN, min(STAT_MAX, self.hp))
-        self.str = max(STAT_MIN, min(STAT_MAX, self.str))
-        self.def_ = max(STAT_MIN, min(STAT_MAX, self.def_))
-        self.agl = max(STAT_MIN, min(STAT_MAX, self.agl))
-        self.int_ = max(STAT_MIN, min(STAT_MAX, self.int_))
-        self.wil = max(STAT_MIN, min(STAT_MAX, self.wil))
 
 
 @dataclass
@@ -80,6 +63,7 @@ class Unit:
 
         self.is_alive = True
         self.has_acted_this_turn = False
+        logger.info(f"Unit {self.name} ({self.id}) created at level {self.level}")
 
     def take_damage(self, damage: int) -> int:
         """Apply damage, return actual damage taken."""
@@ -89,6 +73,7 @@ class Unit:
         if self.current_hp <= 0:
             self.current_hp = 0
             self.is_alive = False
+            logger.info(f"Unit {self.name} defeated")
 
         return actual_damage
 
@@ -129,6 +114,7 @@ class Unit:
 
             self.stats.clamp()
             self.current_hp = self.stats.hp
+            logger.info(f"Unit {self.name} leveled up to {self.level}")
 
     def reset_turn(self) -> None:
         """Reset turn-based flags."""
@@ -156,3 +142,4 @@ class CharacterClass:
     base_level: int = 1
     recruitment_cost: int = 100
     special_abilities: List[str] = field(default_factory=list)
+
