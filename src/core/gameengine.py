@@ -179,6 +179,7 @@ class GameEngine:
         if self.current_state:
             self.current_state.on_exit()
         self.current_state = new_state
+        self.current_state.engine = self
         self.current_state.on_enter()
         
     def push_state(self, new_state: GameState) -> None:
@@ -187,6 +188,7 @@ class GameEngine:
             self.current_state.on_pause()
             self.state_stack.append(self.current_state)
         self.current_state = new_state
+        self.current_state.engine = self
         self.current_state.on_enter()
         
     def pop_state(self) -> None:
@@ -196,6 +198,7 @@ class GameEngine:
         
         if self.state_stack:
             self.current_state = self.state_stack.pop()
+            self.current_state.engine = self
             self.current_state.on_resume()
         else:
             self.running = False

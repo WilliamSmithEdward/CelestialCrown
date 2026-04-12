@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from enum import Enum
+from typing import Any
 
 
 class StateType(Enum):
@@ -19,6 +20,7 @@ class GameState(ABC):
     
     def __init__(self):
         self.state_type: StateType = StateType.MAIN_MENU
+        self.engine: Any = None
         
     @abstractmethod
     def on_enter(self) -> None:

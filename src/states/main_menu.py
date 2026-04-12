@@ -4,9 +4,11 @@ import os
 
 from ._shared import PYGAME_AVAILABLE, pygame
 from ..config import COLOR_BLACK, SCREEN_HEIGHT, SCREEN_WIDTH
+from ..core.campaign import CampaignSession
 from ..core.gamestate import GameState, StateType
 from ..core.services import AudioLoopService, LoopConfig
 from ..effects import AnimatedBackground
+from .town import TownState
 from ..ui import Menu
 
 
@@ -97,7 +99,9 @@ class MainMenuState(GameState):
         result = self.menu.handle_input(event)
         if result is not None:
             if result == 0:
-                print("Starting new game...")
+                session = CampaignSession.new_game()
+                if self.engine is not None:
+                    self.engine.change_state(TownState(session=session, status_message="A new campaign begins."))
             elif result == 1:
                 print("Loading game...")
             elif result == 2:
