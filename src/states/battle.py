@@ -26,6 +26,13 @@ class BattleState(GameState):
         self.mission = load_mission(self._SCENARIO_ID, chapter=self.session.chapter)
         # Inject player squads from session squad plans; keep only enemy squads from config
         player_squads = self.session.build_player_squads()
+        # Position player squads near the player base site with staggered offsets
+        base_site = self.mission.sites.get("player_base")
+        base_x = base_site.x if base_site else 120.0
+        base_y = base_site.y if base_site else 360.0
+        for i, sq in enumerate(player_squads):
+            sq.x = base_x + 55.0
+            sq.y = base_y + (i - (len(player_squads) - 1) / 2.0) * 32.0
         self.mission.squads = player_squads + [s for s in self.mission.squads if s.owner != 0]
 
         self.selected_index = 0

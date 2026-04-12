@@ -37,7 +37,7 @@ _FOREST_LIGHT = (58,  112,  46)
 _FOREST_DARK  = (32,  68,   26)
 _RIVER_DEEP   = (54,  102, 178)
 _RIVER_LIGHT  = (88,  148, 220)
-_RIVER_BANK   = (162, 148,  96)
+_RIVER_BANK   = (118, 96, 58)
 _ROAD_FILL    = (192, 170, 110)
 _ROAD_EDGE    = (152, 128,  72)
 
@@ -114,23 +114,26 @@ def _generate(width: int, height: int, seed: int,
 # ---------------------------------------------------------------------------
 
 def _fill_noise(surf, width: int, height: int, rng: random.Random,
-                base, light, dark, scale: int = 48) -> None:
-    """Fill surface with per-cell colour noise at `scale` pixel block size."""
-    cols = max(1, width  // scale + 2)
-    rows = max(1, height // scale + 2)
-    for gy in range(rows):
-        for gx in range(cols):
-            r2 = rng.random()
-            if r2 < 0.33:
-                c = _lerp_color(base, light, rng.random() * 0.5)
-            elif r2 < 0.66:
-                c = _lerp_color(base, dark, rng.random() * 0.4)
-            else:
-                c = base
-            x0 = gx * scale
-            y0 = gy * scale
-            import pygame as pg
-            pg.draw.rect(surf, c, (x0, y0, scale, scale))
+                base, light, dark, scale: int = 8) -> None:
+    """Fill surface with organic colour scatter — no visible block grid."""
+    import pygame as pg
+    surf.fill(base)
+    # Pass 1: medium blobs for broad tonal variation
+    for _ in range((width * height) // 1200):
+        x = rng.randint(0, width)
+        y = rng.randint(0, height)
+        r = rng.randint(28, 62)
+        t = rng.random() * 0.18
+        c = _lerp_color(base, light if rng.random() < 0.5 else dark, t)
+        pg.draw.circle(surf, c, (x, y), r)
+    # Pass 2: fine stipple dots for close-up texture
+    for _ in range((width * height) // 180):
+        x = rng.randint(0, width)
+        y = rng.randint(0, height)
+        r = rng.randint(2, 8)
+        t = rng.random() * 0.13
+        c = _lerp_color(base, light if rng.random() < 0.5 else dark, t)
+        pg.draw.circle(surf, c, (x, y), r)
 
 
 def _draw_highland(surf, rect: List[int], rng: random.Random, pygame) -> None:
@@ -147,13 +150,13 @@ def _draw_highland(surf, rect: List[int], rng: random.Random, pygame) -> None:
 
 def _fill_noise_rect(surf, x: int, y: int, w: int, h: int, rng: random.Random,
                      base, light, dark, pygame) -> None:
-    scale = 32
+    scale = 16
     cols = max(1, w // scale + 2)
     rows = max(1, h // scale + 2)
     for gy in range(rows):
         for gx in range(cols):
             r2 = rng.random()
-            c = _lerp_color(base, light, r2 * 0.5) if r2 < 0.4 else (_lerp_color(base, dark, r2 * 0.3) if r2 < 0.7 else base)
+            c = _lerp_color(base, light, r2 * 0.35) if r2 < 0.4 else (_lerp_color(base, dark, r2 * 0.25) if r2 < 0.7 else base)
             rx = x + gx * scale
             ry = y + gy * scale
             rw = min(scale, x + w - rx)
@@ -188,24 +191,22 @@ def _draw_river(surf, points: List[List[float]], rng: random.Random, pygame) -> 
     pts = [(int(p[0]), int(p[1])) for p in points]
     smoothed = _chaikin(pts, iterations=3)
 
-    # Bank (sandy edge, slightly wider)
+    # Bank (wide, dark earthy brown)
     for i in range(len(smoothed) - 1):
-        pygame.draw.line(surf, _RIVER_BANK, smoothed[i], smoothed[i + 1], 18)
+        pygame.draw.line(surf, _RIVER_BANK, smoothed[i], smoothed[i + 1], 24)
 
     # Deep water
     for i in range(len(smoothed) - 1):
-        pygame.draw.line(surf, _RIVER_DEEP, smoothed[i], smoothed[i + 1], 12)
+        pygame.draw.line(surf, _RIVER_DEEP, smoothed[i], smoothed[i + 1], 15)
 
-    # Light shimmer strip
-    for i in range(len(smoothed) - 1):
-        mx = (smoothed[i][0] + smoothed[i + 1][0]) // 2
-        my = (smoothed[i][1] + smoothed[i + 1][1]) // 2
-        pygame.draw.line(surf, _RIVER_LIGHT, smoothed[i], (mx, my), 3)
+    # Light shimmer strip (centre highlight)
+    for i in range(0, len(smoothed) - 1, 2):
+        pygame.draw.line(surf, _RIVER_LIGHT, smoothed[i], smoothed[i + 1], 4)
 
 
 def _draw_road(surf, points: List[List[float]], pygame) -> None:
     pts = [(int(p[0]), int(p[1])) for p in points]
-    smoothed = _chaikin(pts, iterations=2)
+    smoothed = _chaikin(pts, iterations=1)  # 1 pass: gentle curve, no over-smoothing
 
     # Outer edge (darker)
     for i in range(len(smoothed) - 1):
