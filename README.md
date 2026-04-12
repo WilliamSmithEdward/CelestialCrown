@@ -6,6 +6,14 @@ A tactical RPG framework inspired by **Ogre Battle: March of the Black Queen**.
 
 Celestial Crown is a Python-based game engine for creating tactical RPGs with grid-based battles, character recruitment, town management, and branching stories with an alignment system.
 
+## Documentation Index
+
+- [Design Philosophy](DesignPhilosophy.md)
+- [Architecture](Architecture.md)
+- [UI/UX Philosophy](UIUXPhilosophy.md)
+- [Roadmap](RoadMap.md)
+- [Development Guide](docs/DEVELOPMENT.md)
+
 ## Features
 
 ### Game Systems
@@ -146,15 +154,7 @@ manager.register_dialogue(node)
 
 ## Development Roadmap
 
-- [ ] Complete battle UI with unit selection and action menus
-- [ ] Town management interface
-- [ ] Map/scenario editor
-- [ ] Save/load system
-- [ ] AI opponents for single-player battles
-- [ ] Multiplayer battle networking (optional)
-- [ ] Sound and music system
-- [ ] Sprite animation system
-- [ ] Tutorial and example scenarios
+See the canonical roadmap in [RoadMap.md](RoadMap.md).
 
 ## Notes
 
