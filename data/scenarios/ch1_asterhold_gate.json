@@ -5,14 +5,15 @@
   "map": {
     "width": 1280,
     "height": 720,
-    "terrain_seed": 43,
-    "terrain_features": [
-      { "type": "river", "points": [[180, 60], [260, 160], [310, 300], [380, 420], [460, 520], [560, 640], [680, 720]] },
-      { "type": "road",  "points": [[120, 360], [300, 280], [520, 360], [740, 280], [1030, 360]] },
-      { "type": "road",  "points": [[530, 380], [700, 460], [860, 500], [1025, 385]] },
-      { "type": "highland", "rect": [0, 0, 400, 180] },
-      { "type": "highland", "rect": [900, 0, 380, 200] },
-      { "type": "forest", "center": [660, 540], "radius": 110 }
+    "seed": 43,
+    "layers": [
+      { "id": "base_grass",    "terrain": "grass",    "type": "fill" },
+      { "id": "highland_nw",   "terrain": "highland", "type": "rect",   "rect": [0, 0, 400, 180] },
+      { "id": "highland_ne",   "terrain": "highland", "type": "rect",   "rect": [900, 0, 380, 200] },
+      { "id": "forest_south",  "terrain": "forest",   "type": "circle", "center": [660, 540], "radius": 110 },
+      { "id": "river_main",    "terrain": "river",    "type": "path",   "points": [[180,60],[260,160],[310,300],[380,420],[460,520],[560,640],[680,720]] },
+      { "id": "road_north",    "terrain": "road",     "type": "path",   "points": [[120,360],[300,280],[520,360],[740,280],[1030,360]] },
+      { "id": "road_south",    "terrain": "road",     "type": "path",   "points": [[530,380],[700,460],[860,500],[1025,385]] }
     ]
   },
   "sites": [

@@ -40,7 +40,7 @@ class BattleState(GameState):
         self.enemy_order_timer = 0.0
         self.status_message = "Assign squads with 1-6. TAB selects squad. SPACE pauses."
 
-        self._terrain_surf = None
+        self._map_renderer = None
         self._sprites = None
         self._map_cfg: Optional[dict] = None
 
@@ -61,7 +61,8 @@ class BattleState(GameState):
             return
 
         import json, pathlib
-        from ..strategy.terrain_gen import get_map_surface
+        from ..strategy.map_def import MapDef
+        from ..strategy.map_renderer import MapRenderer
         from ..strategy.sprite_registry import SpriteRegistry
 
         self._sprites = SpriteRegistry(pygame)
@@ -71,15 +72,17 @@ class BattleState(GameState):
         if cfg_path.exists():
             with cfg_path.open(encoding="utf-8") as f:
                 data = json.load(f)
-            self._map_cfg = data.get("map", {})
+            map_section = data.get("map", {})
         else:
-            self._map_cfg = {}
+            map_section = {}
 
         sw, sh = screen.get_size()
-        cfg = dict(self._map_cfg)
-        cfg.setdefault("width", sw)
-        cfg.setdefault("height", sh)
-        self._terrain_surf = get_map_surface(self._SCENARIO_ID, cfg, pygame)
+        map_section.setdefault("width", sw)
+        map_section.setdefault("height", sh)
+
+        map_def = MapDef.from_dict(map_section)
+        self._map_renderer = MapRenderer(map_def, pygame)
+        self._map_renderer.bake()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -191,14 +194,9 @@ class BattleState(GameState):
         self._ensure_resources(screen)
         width, height = screen.get_size()
 
-        # 1. Terrain background
-        if self._terrain_surf is not None:
-            tw, th = self._terrain_surf.get_size()
-            if (tw, th) != (width, height):
-                bg = pygame.transform.scale(self._terrain_surf, (width, height))
-            else:
-                bg = self._terrain_surf
-            screen.blit(bg, (0, 0))
+        # 1. Terrain background (static bake + animated overlays)
+        if self._map_renderer is not None:
+            self._map_renderer.render(screen, self.mission.time_elapsed)
         else:
             screen.fill((64, 100, 48))
 
