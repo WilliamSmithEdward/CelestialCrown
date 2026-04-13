@@ -2,7 +2,7 @@
 
 Celestial Crown is a Python tactical RPG prototype inspired by Ogre Battle, currently focused on a real-time strategic map that hands off into sprite-based engagement combat.
 
-> I built this project with agentic AI workflows to grow my practical skill in using AI to architect, implement, and iterate on game systems.
+> I built this project with agentic AI workflows to grow my practical skill in using AI to architect, implement, and iterate complex systems.
 
 ![Celestial Crown Title Screen](repo/images/title_screen.png)
 
