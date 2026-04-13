@@ -77,6 +77,11 @@ class MapRenderer:
             (rng.random(), rng.random(), rng.random() * math.tau, rng.randint(18, 52), rng.randint(10, 24))
             for _ in range(36)
         ]
+        # Subtle shooting-star state.
+        self._void_fx_rng = random.Random(map_def.seed + 1777)
+        self._void_shooting: List[Dict[str, float]] = []
+        self._void_last_t: Optional[float] = None
+        self._void_next_shoot_t: float = self._void_fx_rng.uniform(1.4, 3.6)
 
     # ------------------------------------------------------------------
     # Public API
@@ -221,6 +226,114 @@ class MapRenderer:
             a = int(12 + 10 * (0.5 + 0.5 * math.sin(t * 0.9 + i)))
             self._pg.draw.circle(mist, (170, 150, 220, a), (x, y), 1)
         screen.blit(mist, (0, 0))
+
+        self._update_and_render_shooting_stars(screen, t)
+
+    def _update_and_render_shooting_stars(self, screen, t: float) -> None:
+        """Spawn and draw occasional subtle shooting stars in the void."""
+        if self._void_last_t is None:
+            self._void_last_t = t
+        dt = max(0.0, min(0.05, t - self._void_last_t))
+        self._void_last_t = t
+
+        sw, sh = screen.get_size()
+
+        # Spawn one subtle meteor every few seconds.
+        if t >= self._void_next_shoot_t and len(self._void_shooting) < 3:
+            angle = self._void_fx_rng.uniform(0.22, 0.42)  # down-right drift
+            speed = self._void_fx_rng.uniform(520.0, 760.0)
+            spawn = self._random_visible_void_point(sw, sh)
+            if spawn is not None:
+                self._void_shooting.append(
+                    {
+                        "x": spawn[0],
+                        "y": spawn[1],
+                        "vx": math.cos(angle) * speed,
+                        "vy": math.sin(angle) * speed,
+                        "age": 0.0,
+                        "life": self._void_fx_rng.uniform(0.42, 0.72),
+                        "tail": self._void_fx_rng.uniform(70.0, 130.0),
+                    }
+                )
+                self._void_next_shoot_t = t + self._void_fx_rng.uniform(1.9, 4.4)
+            else:
+                # If no void is visible right now, retry soon.
+                self._void_next_shoot_t = t + 0.6
+
+        overlay = self._pg.Surface((sw, sh), self._pg.SRCALPHA)
+        alive: List[Dict[str, float]] = []
+        for star in self._void_shooting:
+            star["age"] += dt
+            if star["age"] >= star["life"]:
+                continue
+
+            star["x"] += star["vx"] * dt
+            star["y"] += star["vy"] * dt
+
+            # Cull stars fully out of view.
+            if star["x"] > sw + 180 or star["y"] > sh + 180:
+                continue
+
+            p = max(0.0, 1.0 - (star["age"] / star["life"]))
+            # Smooth fade curve to avoid abrupt brightness change.
+            p_smooth = p * p * (3.0 - 2.0 * p)
+            base_a = int(180 * p_smooth)
+            if base_a <= 0:
+                continue
+
+            vx = star["vx"]
+            vy = star["vy"]
+            vlen = math.hypot(vx, vy)
+            if vlen < 1e-9:
+                continue
+            dx = vx / vlen
+            dy = vy / vlen
+            tail = star["tail"] * (0.55 + 0.45 * p_smooth)
+
+            # Tail with alpha falloff.
+            segs = 10
+            for i in range(segs):
+                u0 = i / segs
+                u1 = (i + 1) / segs
+                x0 = star["x"] - dx * tail * u0
+                y0 = star["y"] - dy * tail * u0
+                x1 = star["x"] - dx * tail * u1
+                y1 = star["y"] - dy * tail * u1
+                a = int(base_a * ((1.0 - u0) ** 1.8))
+                self._pg.draw.aaline(overlay, (232, 224, 255, a), (x0, y0), (x1, y1))
+
+            # Faint secondary tail for smoother bloom.
+            self._pg.draw.aaline(
+                overlay,
+                (208, 188, 255, max(24, base_a // 4)),
+                (star["x"], star["y"]),
+                (star["x"] - dx * tail * 1.08, star["y"] - dy * tail * 1.08),
+            )
+
+            # Small bright head.
+            self._pg.draw.circle(overlay, (246, 240, 255, min(220, base_a + 60)), (int(star["x"]), int(star["y"])), 2)
+            alive.append(star)
+
+        self._void_shooting = alive
+        screen.blit(overlay, (0, 0))
+
+    def _random_visible_void_point(self, sw: int, sh: int) -> Optional[Tuple[float, float]]:
+        """Return a random on-screen point that lies outside the visible map area."""
+        map_left = self._pad_x - self._cam_x
+        map_top = self._pad_y - self._cam_y
+        map_right = map_left + self._map_w
+        map_bottom = map_top + self._map_h
+
+        def _inside_map(x: float, y: float) -> bool:
+            return map_left <= x <= map_right and map_top <= y <= map_bottom
+
+        # Rejection sample inside viewport until we hit visible void.
+        for _ in range(48):
+            x = self._void_fx_rng.uniform(0.0, float(sw))
+            y = self._void_fx_rng.uniform(0.0, float(sh))
+            if not _inside_map(x, y):
+                return (x, y)
+        return None
 
     def _draw_nebula_ribbon(self, surf, points, radius: int, c0, c1, t: float, idx: int) -> None:
         """Draw smooth ribbon gradients using layered soft-brush stamps."""
