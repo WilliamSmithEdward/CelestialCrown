@@ -1,12 +1,107 @@
 # Celestial Crown
 
-A tactical RPG framework inspired by **Ogre Battle: March of the Black Queen**.
+Celestial Crown is a Python tactical RPG prototype inspired by Ogre Battle, currently focused on a real-time strategic map that hands off into sprite-based engagement combat.
 
-## Overview
+## Current Project State
 
-Celestial Crown is a Python-based game engine for creating tactical RPGs with grid-based battles, character recruitment, town management, and branching stories with an alignment system.
+The project is actively in gameplay iteration mode.
 
-## Documentation Index
+- Main launch path is development-focused: the game starts directly in strategic battle and primes an immediate enemy clash.
+- Strategic map supports camera pan, edge scrolling, wheel zoom, objective control, squad orders, and pressure/income simulation.
+- Opposing squads entering collision radius now push into a dedicated engagement state.
+- Engagements now show animated combat playback with sprites, HP bars, per-action hit/miss/damage, and winner/loss reporting.
+- Menu input behavior distinguishes mouse hover visuals from keyboard/controller focus visuals.
+
+## Gameplay Flow
+
+1. Start in strategic battle (dev default).
+2. Squads move/capture sites on the world map.
+3. When opposing squads collide, game pushes a tactical engagement scene.
+4. Engagement resolves and returns to strategic state with losses applied.
+5. Mission completion transitions back to town/campaign progression.
+
+## Controls
+
+### Strategic Battle
+
+- Mouse wheel: zoom in/out
+- Move mouse to screen edges: scroll map
+- TAB: cycle selected allied squad
+- 1-6: order selected squad to site index
+- R: recall selected squad
+- SPACE: pause/resume simulation
+- ESC: withdraw to town
+
+### Engagement Scene
+
+- Enter or Space: speed up playback
+- Enter or Space after result: return to strategy
+- ESC: return immediately
+
+### Menus
+
+- Keyboard/controller navigation uses focused selection highlight
+- Mouse uses hover highlight
+
+## Getting Started
+
+### Requirements
+
+- Python 3.11-3.13 recommended
+- pygame-ce runtime (installed via requirements)
+
+### Install
+
+```bash
+pip install -r requirements.txt
+```
+
+### Run
+
+```bash
+python main.py
+```
+
+### Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+## Development Notes
+
+- Entry point is [main.py](main.py).
+- Current startup in [main.py](main.py) intentionally bypasses main menu for faster battle iteration.
+- Strategic state is implemented in [src/states/battle.py](src/states/battle.py).
+- Engagement playback state is implemented in [src/states/engagement.py](src/states/engagement.py).
+- Strategic mission rules and collision radius live in [src/strategy/models.py](src/strategy/models.py).
+
+If you want to boot into the main menu instead, change startup state creation in [main.py](main.py) to use MainMenuState.
+
+## Repository Layout
+
+```text
+CelestialCrown/
+├── main.py
+├── src/
+│   ├── core/        # Engine loop, state management, campaign/services
+│   ├── states/      # Main menu, town, strategic battle, engagement playback
+│   ├── strategy/    # Strategic mission models, map rendering, sprite registry
+│   ├── battle/      # Core combat math and turn-order helpers
+│   ├── entities/    # Units, classes, stats, progression
+│   ├── ui/          # Buttons, menus, HUD components
+│   ├── effects/     # Animated background/effect helpers
+│   ├── input/       # Input mapper and high-level actions
+│   ├── map/
+│   ├── story/
+│   └── town/
+├── data/            # Scenarios and campaign data
+├── assets/          # Audio/sprites/art
+└── tests/           # Unit and integration tests
+```
+
+## Documentation
 
 - [Design Philosophy](DesignPhilosophy.md)
 - [Architecture](Architecture.md)
@@ -14,152 +109,6 @@ Celestial Crown is a Python-based game engine for creating tactical RPGs with gr
 - [Roadmap](RoadMap.md)
 - [Development Guide](docs/DEVELOPMENT.md)
 
-## Features
-
-### Game Systems
-- **Tactical Grid-Based Battles**: Cardinal direction (winding) movement on grid maps
-- **Character Management**: Recruit, level, and equip units with different classes
-- **Town/Base Management**: Manage facilities, funds, and morale
-- **Story System**: Branching dialogue with alignment-based choices
-- **Combat System**: Attack calculations, criticals, hit chance, and special abilities
-- **Unit Progression**: Experience, leveling, stat growth by class
-
-### Architecture
-- **Modular Design**: Cleanly separated core systems (battle, entities, map, story, town)
-- **State-Based Engine**: Game state stack for menus, battles, and story sequences
-- **Configuration-Driven**: Easy customization through `config.py`
-- **Extensible Framework**: Base classes for easy subclassing and expansion
-
-## Project Structure
-
-```
-CelestialCrown/
-├── main.py                 # Entry point
-├── requirements.txt        # Runtime dependencies
-├── requirements-dev.txt    # Development/test dependencies
-├── pytest.ini              # Test configuration
-├── src/
-│   ├── config.py          # Game configuration and constants
-│   ├── states/            # Game state implementations
-│   ├── effects/           # Visual effect package (background + primitives)
-│   ├── input/             # Device-agnostic input mapping/actions
-│   ├── core/              # Game engine, state management, and services
-│   ├── entities/          # Units and characters (models.py)
-│   ├── battle/            # Battle systems (systems.py)
-│   ├── map/               # Map models (models.py)
-│   ├── ui/                # UI components (button.py, menu.py, hud.py)
-│   ├── story/             # Story/dialogue models (models.py)
-│   └── town/              # Town models (models.py)
-├── tests/                 # Automated test suite
-│   ├── conftest.py
-│   ├── test_battle.py
-│   ├── test_entities.py
-│   ├── test_menu_input.py
-│   ├── test_story.py
-│   └── test_town.py
-├── assets/                # Game assets (sprites, maps, UI)
-└── data/                  # Game data (scenarios, characters)
-```
-
-## Getting Started
-
-### Installation
-
-1. Install Python 3.9+
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-### Running the Game
-
-```bash
-python main.py
-```
-
-### Running Tests
-
-```bash
-pip install -r requirements-dev.txt
-python -m pytest
-```
-
-### Integration Tests
-
-```bash
-python -m pytest tests/integration
-```
-
-## Core Concepts
-
-### Units and Characters
-Units are individual combatants with:
-- Stats: HP, STR (Attack), DEF (Defense), AGL (Agility), INT (Magic), WIL (Resistance)
-- Classes: Knight, Mage, Archer, Cleric, Rogue
-- Equipment system for weapons, armor, and accessories
-- Experience and leveling with class-based stat growth
-
-### Battle Grid
-- Tactical grid-based battles (12x8 standard)
-- Cardinal-direction movement (north, south, east, west - no diagonals)
-- Range-based combat with hit/miss/critical calculations
-- Turn order based on unit agility
-
-### Alignment System
-Units and the player have alignment (-100 Chaos to +100 Law):
-- Dialogues offer choices that shift alignment
-- Different endings based on final alignment
-- Affects NPC interactions and available recruits
-
-### Town Management
-- Multiple facility types (Tavern, Blacksmith, Temple, Library, etc.)
-- Income generation and unit recruitment
-- Morale system affecting recruitment costs
-- Facility upgrades
-
-## Extending the Framework
-
-### Create a Custom Unit Class
-```python
-from src.entities import Unit, UnitClass
-
-class MyUnit(Unit):
-    def __init__(self, unit_id, name):
-        super().__init__(unit_id, name, UnitClass.KNIGHT)
-        # Custom initialization
-```
-
-### Add Custom Battles
-```python
-from src.battle import BattleState, BattleGrid
-
-# Create battle grid and place units
-grid = BattleGrid(12, 8)
-# Add your units...
-```
-
-### Create Story Scenarios
-```python
-from src.story import DialogueNode, StoryManager
-
-manager = StoryManager()
-node = DialogueNode(
-    id="test_scene",
-    speaker="NPC",
-    text="Hello adventurer!",
-    next_dialogue="next_scene_id"
-)
-manager.register_dialogue(node)
-```
-
-## Development Roadmap
-
-See the canonical roadmap in [RoadMap.md](RoadMap.md).
-
-## Notes
-
-This is a framework designed to be extended. The core systems are in place, but UI implementations, asset creation, and scenario design are left to you.
-
 ## License
 
-This software is proprietary and confidential. All rights reserved. See [LICENSE](LICENSE) file for details.
+See [LICENSE](LICENSE).
