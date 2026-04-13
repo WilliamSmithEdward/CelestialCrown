@@ -168,18 +168,20 @@ class MapRenderer:
 
         # Animated nebula flow ribbons built from layered glow passes.
         haze = self._pg.Surface((sw, sh), self._pg.SRCALPHA)
-        for idx, (base_y, amp1, amp2, speed, phase, radius, c0, c1) in enumerate([
-            (0.23, 34.0, 18.0, 0.11, 0.2, 72, (66, 20, 126), (126, 58, 176)),
-            (0.58, 42.0, 22.0, 0.09, 1.6, 84, (58, 18, 116), (112, 50, 164)),
-            (0.79, 28.0, 16.0, 0.13, 2.7, 64, (50, 16, 104), (98, 44, 148)),
+        for idx, (base_y, amp1, amp2, speed, drift, phase, radius, c0, c1) in enumerate([
+            (0.23, 34.0, 18.0, 0.11, 0.030, 0.2, 72, (48, 15, 94), (94, 42, 138)),
+            (0.58, 42.0, 22.0, 0.09, 0.022, 1.6, 84, (42, 13, 84), (84, 36, 126)),
+            (0.79, 28.0, 16.0, 0.13, 0.036, 2.7, 64, (36, 11, 74), (72, 31, 112)),
         ]):
             points = []
             for x in range(-24, sw + 25, 8):
                 xf = x / max(1, sw)
+                # Slow left-to-right drift of the wave field.
+                phase_x = xf - t * drift
                 y = (
                     sh * base_y
-                    + math.sin(xf * math.tau * 1.55 + t * speed + phase) * amp1
-                    + math.sin(xf * math.tau * 3.85 - t * (speed * 0.75) + phase * 1.5) * amp2
+                    + math.sin(phase_x * math.tau * 1.55 + t * speed * 0.25 + phase) * amp1
+                    + math.sin(phase_x * math.tau * 3.85 - t * (speed * 0.20) + phase * 1.5) * amp2
                 )
                 points.append((x, y))
             self._draw_nebula_ribbon(haze, points, radius, c0, c1, t, idx)
@@ -225,13 +227,13 @@ class MapRenderer:
         pg = self._pg
         # Outer to inner glow passes; each pass uses a soft radial alpha brush.
         passes = [
-            (1.08, 34, 0.18),
-            (0.72, 52, 0.46),
-            (0.44, 72, 0.78),
+            (1.08, 24, 0.18),
+            (0.72, 36, 0.46),
+            (0.44, 48, 0.78),
         ]
         # Pulse between low/high transparency states per ribbon.
-        pulse_mix = 0.5 + 0.5 * math.sin(t * 2.1 + idx * 1.35)
-        alpha_mult = 0.62 + 0.46 * pulse_mix
+        pulse_mix = 0.5 + 0.5 * math.sin(t * 1.2 + idx * 1.35)
+        alpha_mult = 0.35 + 0.25 * pulse_mix
         for scale, alpha, mix in passes:
             r = max(2, int(radius * scale))
             col = _lerp(c0, c1, mix)
