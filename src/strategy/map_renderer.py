@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .map_def import LayerDef, MapDef
 
@@ -709,7 +709,7 @@ def _chaikin(pts: List[Tuple[int, int]], iterations: int = 2) -> List[Tuple[int,
     return pts
 
 
-def _pos_at(pts: List[Tuple[int, int]], lengths: List[float], d: float) -> Tuple[float, float]:
+def _pos_at(pts: Sequence[Tuple[float, float]], lengths: Sequence[float], d: float) -> Tuple[float, float]:
     if d <= 0:
         return pts[0]
     if d >= lengths[-1]:
