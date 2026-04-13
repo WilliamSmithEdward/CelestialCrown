@@ -56,9 +56,7 @@ class BattleState(GameState):
         self._zoom_min: float = 0.55
         self._zoom_max: float = 1.45
         self._zoom_settle_accum: float = 0.0
-        self._zoom_full_rebake_pending: bool = False
-        self._zoom_full_rebake_t: float = 0.0
-        self._zoom_full_rebake_delay: float = 0.55
+        self._zoom_rebake_detail: float = 0.78
         self._zoom_input_idle: float = 999.0
         self._zoom_anchor_screen: Optional[tuple] = None
         # Which edges are currently being scrolled: [left, right, up, down]
@@ -234,8 +232,6 @@ class BattleState(GameState):
             )
             self._zoom_input_idle = 0.0
             self._zoom_target = max(self._zoom_min, min(self._zoom_max, self._zoom_target + event.y * 0.08))
-            self._zoom_full_rebake_pending = False
-            self._zoom_full_rebake_t = 0.0
             self.status_message = f"Zoom {int(self._zoom_target * 100)}%"
             return
         if event.type == pygame.KEYDOWN:
@@ -290,27 +286,13 @@ class BattleState(GameState):
                     self._zoom_settle_accum += delta_time
                 if self._zoom_settle_accum >= 0.08:
                     self._zoom = self._zoom_target
-                    # First rebake at reduced detail to minimize settle hitch.
-                    self._rebake_for_zoom(detail_scale=0.30)
-                    self._zoom_full_rebake_pending = True
-                    self._zoom_full_rebake_t = 0.0
+                    # Single-pass settle rebake avoids delayed stage pops.
+                    self._rebake_for_zoom(detail_scale=self._zoom_rebake_detail)
                     self._zoom_settle_accum = 0.0
             else:
                 self._zoom_settle_accum = 0.0
-                self._zoom_full_rebake_pending = False
-                self._zoom_full_rebake_t = 0.0
-        elif self._zoom_full_rebake_pending:
-            if abs(self._zoom_target - self._zoom) > 1e-4:
-                self._zoom_full_rebake_pending = False
-                self._zoom_full_rebake_t = 0.0
-            else:
-                self._zoom_full_rebake_t += delta_time
-                if self._zoom_full_rebake_t >= self._zoom_full_rebake_delay and self._zoom_input_idle >= 0.35:
-                    self._rebake_quality_only(detail_scale=1.0)
-                    self._zoom_full_rebake_pending = False
-                    self._zoom_full_rebake_t = 0.0
 
-        if abs(self._zoom_target - self._zoom) <= 1e-4 and not self._zoom_full_rebake_pending:
+        if abs(self._zoom_target - self._zoom) <= 1e-4:
             self._zoom_anchor_screen = None
 
         # Edge-scroll with smooth acceleration/deceleration (works while paused).
