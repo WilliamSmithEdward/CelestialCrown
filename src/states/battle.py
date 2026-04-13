@@ -234,6 +234,16 @@ class BattleState(GameState):
     def _display_scale_for_zoom(self, zoom_level: float) -> float:
         return max(1e-4, float(zoom_level) / max(1e-4, self._zoom))
 
+    def _active_zoom_min(self) -> float:
+        """Minimum zoom that still changes the rendered map at current viewport size."""
+        if self._map_renderer is None:
+            return self._zoom_min
+        sw, sh = self._screen_size
+        fit_scale_x = sw / max(1.0, float(self._map_renderer._bake_w))
+        fit_scale_y = sh / max(1.0, float(self._map_renderer._bake_h))
+        fit_floor = self._zoom * max(fit_scale_x, fit_scale_y)
+        return max(self._zoom_min, fit_floor)
+
     def _update_camera_bounds_for_zoom(self, zoom_level: float) -> None:
         if self._map_renderer is None:
             return
@@ -248,7 +258,8 @@ class BattleState(GameState):
         self._cam_y = min(self._cam_max_y, max(0.0, self._cam_y))
 
     def _apply_visual_zoom(self, new_zoom_visual: float) -> None:
-        clamped_zoom = max(self._zoom_min, min(self._zoom_max, float(new_zoom_visual)))
+        active_min = self._active_zoom_min()
+        clamped_zoom = max(active_min, min(self._zoom_max, float(new_zoom_visual)))
         if self._map_renderer is None:
             self._zoom_visual = clamped_zoom
             return
@@ -314,6 +325,7 @@ class BattleState(GameState):
             sw, sh = self._screen_size
             mx, my = pygame.mouse.get_pos()
             hud_h = 54
+            active_min = self._active_zoom_min()
             self._zoom_anchor_screen = (
                 max(0, min(sw - 1, int(mx))),
                 max(0, min(sh - hud_h - 1, int(my))),
@@ -321,7 +333,7 @@ class BattleState(GameState):
             self._zoom_input_idle = 0.0
             prev_target = self._zoom_target
             self._zoom_target = max(
-                self._zoom_min,
+                active_min,
                 min(self._zoom_max, self._zoom_target + event.y * self._zoom_wheel_step),
             )
             # Immediate response to wheel input before per-frame smoothing catches up.
@@ -385,23 +397,36 @@ class BattleState(GameState):
 
         # Edge-scroll with smooth acceleration/deceleration (works while paused).
         if PYGAME_AVAILABLE:
-            _ZONE = 72.0
-            _MAX_SPEED = 760.0
+            _ZONE = 92.0
+            _MAX_SPEED = 900.0
             _HUD_H = 54.0
             sw2, sh2 = self._screen_size
             mx, my = pygame.mouse.get_pos()
 
-            left = max(0.0, (_ZONE - mx) / _ZONE)
-            right = max(0.0, (mx - (sw2 - _ZONE)) / _ZONE)
-            up = max(0.0, (_ZONE - my) / _ZONE)
+            def _edge_curve(v: float) -> float:
+                # Deadzone + smoothstep curve removes boundary stepping/jitter.
+                v = max(0.0, min(1.0, v))
+                if v <= 0.04:
+                    return 0.0
+                t = (v - 0.04) / 0.96
+                return t * t * (3.0 - 2.0 * t)
+
+            left = _edge_curve((_ZONE - mx) / _ZONE)
+            right = _edge_curve((mx - (sw2 - _ZONE)) / _ZONE)
+            up = _edge_curve((_ZONE - my) / _ZONE)
             down_limit = sh2 - _HUD_H
-            down = max(0.0, (my - (down_limit - _ZONE)) / _ZONE)
+            down = _edge_curve((my - (down_limit - _ZONE)) / _ZONE)
 
             target_vx = (right - left) * _MAX_SPEED
             target_vy = (down - up) * _MAX_SPEED
-            v_blend = min(1.0, delta_time * 12.0)
+            v_blend = 1.0 - math.exp(-16.0 * max(0.0, delta_time))
             self._cam_vx += (target_vx - self._cam_vx) * v_blend
             self._cam_vy += (target_vy - self._cam_vy) * v_blend
+            # Extra damping when not actively driven keeps camera glide soft and stable.
+            if abs(target_vx) < 1e-3:
+                self._cam_vx *= math.exp(-14.0 * max(0.0, delta_time))
+            if abs(target_vy) < 1e-3:
+                self._cam_vy *= math.exp(-14.0 * max(0.0, delta_time))
 
             self._scroll_flags[0] = left > 0.05
             self._scroll_flags[1] = right > 0.05
