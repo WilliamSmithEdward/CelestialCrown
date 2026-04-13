@@ -509,8 +509,8 @@ class BattleState(GameState):
             drew_void = True
             self._map_renderer.set_camera(self._cam_x, self._cam_y)
             self._map_renderer.set_display_scale(display_scale)
-            interactive_zoom = self._zoom_input_idle < 0.12 or abs(self._zoom_target - self._zoom_visual) > 0.002
-            self._map_renderer.set_fast_scale_mode(interactive_zoom)
+            # Keep a single scaling path to avoid visible luminance shifts while zooming.
+            self._map_renderer.set_fast_scale_mode(False)
             self._map_renderer.render(scene, self.mission.time_elapsed, render_void=False)
 
             # Derive sprite scaling from actual map on-screen scale after render clamping/fitting.
