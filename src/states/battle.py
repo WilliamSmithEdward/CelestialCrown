@@ -82,7 +82,7 @@ class BattleState(GameState):
 
         map_def = MapDef.from_dict(map_section)
         self._map_renderer = MapRenderer(map_def, pygame)
-        self._map_renderer.bake()
+        self._map_renderer.bake(sw, sh)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -118,6 +118,13 @@ class BattleState(GameState):
                        else f"Mission lost. {report.party_losses} party losses.")
         if self.engine is not None:
             self.engine.change_state(TownState(session=self.session, status_message=message))
+
+    def _p(self, wx: float, wy: float) -> tuple:
+        """Project world coordinate to isometric screen coordinate."""
+        if self._map_renderer is not None:
+            px, py = self._map_renderer.project(wx, wy)
+            return (int(px), int(py))
+        return (int(wx), int(wy))
 
     # ------------------------------------------------------------------
     # GameState interface
@@ -223,7 +230,7 @@ class BattleState(GameState):
             is_hot = (a_id, b_id) in hot_lanes
             lc = (200, 80, 60, 140) if is_hot else (220, 190, 120, 70)
             lw = 4 if is_hot else 3
-            pygame.draw.line(lane_surf, lc, (int(a.x), int(a.y)), (int(b.x), int(b.y)), lw)
+            pygame.draw.line(lane_surf, lc, self._p(a.x, a.y), self._p(b.x, b.y), lw)
         screen.blit(lane_surf, (0, 0))
 
         # 4. Threat auras
@@ -236,18 +243,19 @@ class BattleState(GameState):
             stype = site.site_type.name if hasattr(site.site_type, "name") else str(site.site_type)
             sw_s = 80 if stype == "BASE" else (70 if stype in ("FORT", "TEMPLE") else 60)
             sh_s = sw_s
+            bx_s, by_s = self._p(site.x, site.y)
             if self._sprites is not None:
                 building = self._sprites.site_building(stype, site.owner, sw_s, sh_s)
-                bx = int(site.x) - sw_s // 2
-                by = int(site.y) - sh_s + 16
+                bx = bx_s - sw_s // 2
+                by = by_s - sh_s + 16
                 screen.blit(building, (bx, by))
             if 0.0 < site.capture_progress < 100.0:
                 self._draw_capture_ring(screen, site)
             if self.small_font is not None:
                 lc2 = (200, 230, 255) if site.owner == 0 else ((255, 180, 160) if site.owner == 1 else (220, 220, 200))
                 lbl = self.small_font.render(f"{idx + 1} {site.name}", True, lc2)
-                lbl_x = int(site.x) - lbl.get_width() // 2
-                lbl_y = int(site.y) - sh_s - 6
+                lbl_x = bx_s - lbl.get_width() // 2
+                lbl_y = by_s - sh_s - 6
                 shadow = self.small_font.render(f"{idx + 1} {site.name}", True, (10, 10, 10))
                 screen.blit(shadow, (lbl_x + 1, lbl_y + 1))
                 screen.blit(lbl, (lbl_x, lbl_y))
@@ -262,20 +270,21 @@ class BattleState(GameState):
             if squad.is_destroyed():
                 continue
             role_name = squad.role.value if hasattr(squad.role, "value") else "assault"
+            sx, sy = self._p(squad.x, squad.y)
             if self._sprites is not None:
                 token = self._sprites.squad_token(squad.owner, role_name, 44, 50)
-                screen.blit(token, (int(squad.x) - 22, int(squad.y) - 40))
+                screen.blit(token, (sx - 22, sy - 40))
             if selected is not None and squad.id == selected.id:
-                pygame.draw.circle(screen, (255, 240, 80), (int(squad.x), int(squad.y) - 14), 28, 2)
+                pygame.draw.circle(screen, (255, 240, 80), (sx, sy - 14), 28, 2)
             if squad.target_site_id and squad.target_site_id in self.mission.sites:
                 target = self.mission.sites[squad.target_site_id]
                 lc3 = (120, 190, 255, 150) if squad.owner == 0 else (255, 120, 100, 110)
                 pygame.draw.line(order_surf, lc3,
-                                 (int(squad.x), int(squad.y) - 14),
-                                 (int(target.x), int(target.y)), 1)
+                                 (sx, sy - 14),
+                                 self._p(target.x, target.y), 1)
             if self.small_font is not None and selected is not None and squad.id == selected.id:
                 tag = self.small_font.render(squad.name, True, (255, 240, 140))
-                screen.blit(tag, (int(squad.x) - tag.get_width() // 2, int(squad.y) - 58))
+                screen.blit(tag, (sx - tag.get_width() // 2, sy - 58))
         screen.blit(order_surf, (0, 0))
 
         # 8. HUD
@@ -299,7 +308,8 @@ class BattleState(GameState):
             r = 46
             surf = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
             pygame.draw.circle(surf, (220, 50, 50, pulse), (r, r), r)
-            screen.blit(surf, (int(site.x) - r, int(site.y) - r))
+            cx, cy = self._p(site.x, site.y)
+            screen.blit(surf, (cx - r, cy - r))
 
     def _render_intercept_forecast(self, screen) -> None:
         p_squads = [s for s in self.mission.squads if s.owner == 0 and not s.is_destroyed() and s.target_site_id]
@@ -325,7 +335,7 @@ class BattleState(GameState):
                 )
                 if result is None:
                     continue
-                ix, iy = int(result[0]), int(result[1])
+                ix, iy = self._p(result[0], result[1])
                 key = (ix // 24, iy // 24)
                 if key in drawn:
                     continue
@@ -336,7 +346,7 @@ class BattleState(GameState):
                 pygame.draw.polygon(screen, (170, 120, 10), pts, 1)
 
     def _draw_capture_ring(self, screen, site) -> None:
-        cx, cy = int(site.x), int(site.y)
+        cx, cy = self._p(site.x, site.y)
         r = 32
         color = (80, 200, 120) if site.owner == 0 else (200, 80, 80) if site.owner == 1 else (200, 200, 80)
         angle = int(360 * site.capture_progress / 100)
