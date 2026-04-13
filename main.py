@@ -2,7 +2,7 @@
 
 from src.core.gameengine import GameEngine
 from src.core.campaign import CampaignSession
-from src.states import MainMenuState, BattleState
+from src.states import BattleState
 
 
 def main():
@@ -10,9 +10,9 @@ def main():
     try:
         engine = GameEngine()
 
-        # DEV: drop straight into the battle map to test threat overlays
+        # DEV: drop straight into the battle map with an immediate squad clash.
         session = CampaignSession.new_game()
-        engine.change_state(BattleState(session=session))
+        engine.change_state(BattleState(session=session, start_in_engagement=True))
         
         # Run game loop
         engine.run()

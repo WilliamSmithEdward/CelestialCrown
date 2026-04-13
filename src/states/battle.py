@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import math
 import random
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from ._shared import PYGAME_AVAILABLE, pygame
 from ..config import COLOR_BLACK, COLOR_WHITE
 from ..core.campaign import CampaignSession
 from ..core.gamestate import GameState, StateType
+from ..strategy import EngagementReport, Squad
 
 
 class BattleState(GameState):
@@ -18,10 +19,11 @@ class BattleState(GameState):
     _SCENARIO_ID = "ch1_asterhold_gate"
     _IGNORE_DEFEAT_FOR_TESTING = True
 
-    def __init__(self, session: CampaignSession | None = None):
+    def __init__(self, session: CampaignSession | None = None, start_in_engagement: bool = False):
         super().__init__()
         self.state_type = StateType.BATTLE
         self.session = session or CampaignSession.new_game()
+        self._start_in_engagement = bool(start_in_engagement)
 
         from ..strategy.mission_loader import load_mission
         self.mission = load_mission(self._SCENARIO_ID, chapter=self.session.chapter)
@@ -35,6 +37,8 @@ class BattleState(GameState):
             sq.x = base_x + 55.0
             sq.y = base_y + (i - (len(player_squads) - 1) / 2.0) * 32.0
         self.mission.squads = player_squads + [s for s in self.mission.squads if s.owner != 0]
+        if self._start_in_engagement:
+            self._prime_debug_engagement()
 
         self.selected_index = 0
         self.paused = False
@@ -72,6 +76,7 @@ class BattleState(GameState):
         # Which edges are currently being scrolled: [left, right, up, down]
         self._scroll_flags: List[bool] = [False, False, False, False]
         self._screen_size: tuple = (1280, 720)
+        self._engagement_cooldown: float = 0.0
 
         if PYGAME_AVAILABLE:
             self.title_font = pygame.font.Font(None, 42)
@@ -214,6 +219,67 @@ class BattleState(GameState):
             if squad.target_site_id is None or random.random() < 0.35:
                 targets = player_sites if player_sites else fallback
                 self.mission.issue_order(squad.id, random.choice(targets))
+
+    def _find_engagement_pair(self) -> Optional[Tuple[Squad, Squad]]:
+        active = [s for s in self.mission.squads if not s.is_destroyed()]
+        for i, squad_a in enumerate(active):
+            for squad_b in active[i + 1 :]:
+                if squad_a.owner == squad_b.owner:
+                    continue
+                if math.hypot(squad_a.x - squad_b.x, squad_a.y - squad_b.y) <= self.mission.collision_radius:
+                    return squad_a, squad_b
+        return None
+
+    def _separate_engagement_pair(self, squad_a: Squad, squad_b: Squad) -> None:
+        dx = squad_b.x - squad_a.x
+        dy = squad_b.y - squad_a.y
+        dist = math.hypot(dx, dy)
+        if dist < 1e-5:
+            dx, dy, dist = 1.0, 0.0, 1.0
+        nx = dx / dist
+        ny = dy / dist
+        offset = max(12.0, self.mission.collision_radius * 0.65)
+        squad_a.x -= nx * offset
+        squad_a.y -= ny * offset
+        squad_b.x += nx * offset
+        squad_b.y += ny * offset
+
+    def _on_engagement_complete(self, report: EngagementReport) -> None:
+        self.mission.last_engagement = report
+        squad_a = next((s for s in self.mission.squads if s.id == report.squad_a_id), None)
+        squad_b = next((s for s in self.mission.squads if s.id == report.squad_b_id), None)
+        if squad_a is not None and squad_b is not None and not squad_a.is_destroyed() and not squad_b.is_destroyed():
+            self._separate_engagement_pair(squad_a, squad_b)
+        self.status_message = (
+            f"Clash: {report.squad_a_id} vs {report.squad_b_id} | "
+            f"Losses {report.losses_a}-{report.losses_b}"
+        )
+        self._engagement_cooldown = 0.75
+
+    def _prime_debug_engagement(self) -> None:
+        """Move one allied and one enemy squad into immediate collision range for battle iteration."""
+        allied = next((s for s in self.mission.allied_squads(0) if not s.is_destroyed()), None)
+        enemy = next((s for s in self.mission.allied_squads(1) if not s.is_destroyed()), None)
+        if allied is None or enemy is None:
+            return
+
+        anchor = self.mission.sites.get("center_fort") or self.mission.sites.get("player_base")
+        if anchor is not None:
+            anchor_x, anchor_y = anchor.x, anchor.y
+        else:
+            anchor_x = (allied.x + enemy.x) * 0.5
+            anchor_y = (allied.y + enemy.y) * 0.5
+
+        spacing = max(8.0, self.mission.collision_radius * 0.42)
+        allied.x = anchor_x - spacing
+        allied.y = anchor_y
+        enemy.x = anchor_x + spacing
+        enemy.y = anchor_y
+        allied.target_site_id = None
+        enemy.target_site_id = None
+        allied.is_retreating = False
+        enemy.is_retreating = False
+        self.status_message = "Dev start: immediate engagement primed."
 
     def _return_to_town(self, result: str, message: str, apply_outcome: bool) -> None:
         from .town import TownState
@@ -385,6 +451,7 @@ class BattleState(GameState):
                         self.status_message = f"{sel.name} to {self.mission.sites[site_id].name}."
 
     def update(self, delta_time: float) -> None:
+        self._engagement_cooldown = max(0.0, self._engagement_cooldown - max(0.0, delta_time))
         self._zoom_input_idle += delta_time
 
         # High-FPS zoom preview: animate visual zoom every frame (no rebake stages).
@@ -466,7 +533,23 @@ class BattleState(GameState):
         if self.enemy_order_timer >= 2.0:
             self.enemy_order_timer = 0.0
             self._issue_enemy_orders()
-        self.mission.update(delta_time)
+        # Tactical engagements are handled via state transition, not auto-resolved in strategy update.
+        self.mission.update(delta_time, resolve_collisions=False)
+        if self._engagement_cooldown <= 0.0 and self.engine is not None:
+            pair = self._find_engagement_pair()
+            if pair is not None:
+                from .engagement import EngagementState
+
+                squad_a, squad_b = pair
+                self._engagement_cooldown = 0.35
+                self.engine.push_state(
+                    EngagementState(
+                        squad_a=squad_a,
+                        squad_b=squad_b,
+                        on_complete=self._on_engagement_complete,
+                    )
+                )
+                return
         if self.mission.last_engagement is not None:
             r = self.mission.last_engagement
             self.status_message = (f"Clash: {r.squad_a_id} vs {r.squad_b_id} | "

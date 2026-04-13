@@ -148,12 +148,15 @@ class StrategicMission:
         squad.is_retreating = True
         return True
 
-    def update(self, delta_time: float) -> None:
+    def update(self, delta_time: float, resolve_collisions: bool = True) -> None:
         """Advance mission simulation in real time."""
         self.time_elapsed += max(0.0, delta_time)
         self._move_squads(delta_time)
         self._resolve_captures(delta_time)
-        self._resolve_collisions()
+        if resolve_collisions:
+            self._resolve_collisions()
+        else:
+            self.last_engagement = None
         self._update_income_and_pressure()
 
     def _move_squads(self, delta_time: float) -> None:
@@ -338,6 +341,11 @@ def _resolve_engagement(squad_a: Squad, squad_b: Squad) -> EngagementReport:
         losses_a=losses_a,
         losses_b=losses_b,
     )
+
+
+def resolve_engagement(squad_a: Squad, squad_b: Squad) -> EngagementReport:
+    """Public engagement resolver for tactical state handoff."""
+    return _resolve_engagement(squad_a, squad_b)
 
 
 def _distance(x1: float, y1: float, x2: float, y2: float) -> float:

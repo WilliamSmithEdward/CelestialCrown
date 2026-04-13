@@ -63,8 +63,13 @@ class SpriteRegistry:
             variant = "allied" if owner == 0 else ("enemy" if owner == 1 else "neutral")
             sprite_key = self._site_sprite_key(site_type, variant)
             png_key = f"sites/{sprite_key}.png"
-            self._cache[key] = self._load_or_placeholder(png_key, w, h,
-                                                          lambda: self._make_site_building(site_type, owner, w, h))
+            sprite = self._load_or_placeholder(
+                png_key,
+                w,
+                h,
+                lambda: self._make_site_building(site_type, owner, w, h),
+            )
+            self._cache[key] = self._strip_building_shadow(sprite)
         return self._cache[key]
 
     def hud_clock_frame(self, w: int = 160, h: int = 88) -> Any:
@@ -126,9 +131,10 @@ class SpriteRegistry:
         # Owner tint overlay
         tint = _OWNER_TINT.get(owner, (0, 0, 0, 0))
         if tint[3] > 0:
+            # Apply tint to existing building pixels only; keep transparent background transparent.
             t = pg.Surface((w, h), pg.SRCALPHA)
-            t.fill(tint)
-            surf.blit(t, (0, 0))
+            t.fill((tint[0], tint[1], tint[2], 0))
+            surf.blit(t, (0, 0), special_flags=pg.BLEND_RGB_ADD)
 
         return surf
 
@@ -248,6 +254,17 @@ class SpriteRegistry:
             except Exception:
                 pass
         return fallback()
+
+    def _strip_building_shadow(self, sprite) -> Any:
+        """Remove semi-transparent dark drop shadows baked into site sprites."""
+        cleaned = sprite.copy()
+        width, height = cleaned.get_size()
+        for y in range(height):
+            for x in range(width):
+                r, g, b, a = cleaned.get_at((x, y))
+                if 0 < a < 185 and max(r, g, b) < 82:
+                    cleaned.set_at((x, y), (r, g, b, 0))
+        return cleaned
 
     @staticmethod
     def _site_sprite_key(site_type: str, variant: str) -> str:
