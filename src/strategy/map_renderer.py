@@ -1,16 +1,17 @@
-﻿"""MapRenderer — bakes static terrain layers once, composites animated layers each frame.
+﻿"""MapRenderer — bakes static terrain layers once, composites animated overlays per-frame.
 
 Coordinate system
 -----------------
-All world coordinates (from scenario JSON) are converted to isometric screen
-coordinates via ``project()``:
+World coordinates (from the scenario JSON) are scaled by MAP_SCALE and then
+offset by an (cam_x, cam_y) camera position for screen rendering:
 
-    screen_x = iso_ox + (world_x - world_y) * iso_s
-    screen_y = iso_oy + (world_x + world_y) * iso_s * 0.5
+    screen_x = world_x * MAP_SCALE - cam_x
+    screen_y = world_y * MAP_SCALE - cam_y
 
-This produces a classic 2:1 isometric (diamond) layout.
-``iso_s`` and ``(iso_ox, iso_oy)`` are computed in ``bake()`` so the whole
-diamond fits within the screen, leaving room for the bottom HUD strip.
+``bake()`` pre-renders all static layers onto a surface of size
+(world_w * MAP_SCALE, world_h * MAP_SCALE).  The camera pans this surface over
+the viewport without re-baking.  Call ``set_camera(cam_x, cam_y)`` each frame
+before ``render()``.
 
 Extending animated terrains
 ----------------------------
@@ -28,6 +29,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .map_def import LayerDef, MapDef
 
+# World units are scaled by this factor when baking / projecting.
+# Values > 1.0 make the baked map larger than the typical viewport, enabling
+# the camera to pan around it.
+MAP_SCALE: float = 1.8
+
 
 class MapRenderer:
     """Owns the static baked surface and per-frame animated overlays."""
@@ -36,13 +42,16 @@ class MapRenderer:
         self._def = map_def
         self._pg = pygame
         self._static_surf: Optional[Any] = None
-        # Smoothed paths in SCREEN space (set during bake for animated layers)
+        # Smoothed paths in BAKE space (world * scale). Camera offset applied at render time.
         self._smoothed: Dict[str, List[Tuple[int, int]]] = {}
-        self._rng = random.Random(map_def.seed)
-        # Isometric projection parameters (set in bake)
-        self._iso_s: float = 0.5
-        self._iso_ox: float = 0.0
-        self._iso_oy: float = 0.0
+        self._scale: float = MAP_SCALE
+        # Camera offset in bake-surface pixels (set each frame via set_camera)
+        self._cam_x: float = 0.0
+        self._cam_y: float = 0.0
+        # Baked surface dimensions (set in bake())
+        self._bake_w: int = map_def.width
+        self._bake_h: int = map_def.height
+        # Viewport dimensions (set in bake())
         self._screen_w: int = map_def.width
         self._screen_h: int = map_def.height
 
@@ -51,89 +60,72 @@ class MapRenderer:
     # ------------------------------------------------------------------
 
     def project(self, wx: float, wy: float) -> Tuple[float, float]:
-        """Convert world coordinates to isometric screen coordinates."""
-        sx = self._iso_ox + (wx - wy) * self._iso_s
-        sy = self._iso_oy + (wx + wy) * self._iso_s * 0.5
-        return (sx, sy)
+        """Convert world coordinates to current screen coordinates."""
+        return (wx * self._scale - self._cam_x, wy * self._scale - self._cam_y)
+
+    def set_camera(self, cam_x: float, cam_y: float) -> None:
+        """Set camera scroll offset (bake-surface pixels)."""
+        self._cam_x = cam_x
+        self._cam_y = cam_y
+
+    def cam_max(self, screen_w: int, screen_h: int) -> Tuple[float, float]:
+        """Return (max_cam_x, max_cam_y) for clamping the camera scroll."""
+        return (
+            max(0.0, float(self._bake_w - screen_w)),
+            max(0.0, float(self._bake_h - screen_h)),
+        )
 
     def bake(self, screen_w: Optional[int] = None, screen_h: Optional[int] = None) -> None:
-        """Render all static layers to a cached Surface.
-        Pass screen dimensions so the diamond is fitted to the actual window.
-        """
+        """Render all static layers onto a cached Surface of size (world * scale)."""
         sw = screen_w or self._def.width
         sh = screen_h or self._def.height
         self._screen_w = sw
         self._screen_h = sh
-        self._compute_iso_params(sw, sh)
+        self._bake_w = int(self._def.width * self._scale)
+        self._bake_h = int(self._def.height * self._scale)
 
         pg = self._pg
-        surf = pg.Surface((sw, sh))
+        surf = pg.Surface((self._bake_w, self._bake_h))
         rng = random.Random(self._def.seed)
 
         for layer in self._def.layers:
             if layer.animated:
-                # Pre-compute smoothed path in screen space
+                # Pre-compute smoothed paths in bake space (no cam offset yet)
                 if layer.points:
                     world_pts = [(int(p[0]), int(p[1])) for p in layer.points]
                     smooth_world = _chaikin(world_pts, iterations=3)
                     self._smoothed[layer.id] = [
-                        (int(px), int(py))
-                        for px, py in (self.project(x, y) for x, y in smooth_world)
+                        (int(wx * self._scale), int(wy * self._scale))
+                        for wx, wy in smooth_world
                     ]
                 self._bake_animated_base(surf, layer)
             else:
                 self._bake_static_layer(surf, layer, rng)
 
-        # Darken area outside the ISO diamond
-        self._bake_iso_vignette(surf, sw, sh)
         self._static_surf = surf
 
     def render(self, screen, time_elapsed: float) -> None:
-        """Blit the static surface then composite animated layers."""
+        """Blit the static surface (panned by camera) then composite animated layers."""
         if self._static_surf is None:
             screen.fill((22, 32, 18))
             return
-        screen.blit(self._static_surf, (0, 0))
+        cx, cy = int(self._cam_x), int(self._cam_y)
+        screen.blit(self._static_surf, (-cx, -cy))
         for layer in self._def.layers:
             if layer.animated:
                 self._render_animated_layer(screen, layer, time_elapsed)
 
     # ------------------------------------------------------------------
-    # ISO projection parameters
+    # World → bake coordinate helpers
     # ------------------------------------------------------------------
 
-    def _compute_iso_params(self, sw: int, sh: int) -> None:
-        ww, wh = self._def.width, self._def.height
-        hud_reserve = 68
-        usable_h = sh - hud_reserve
+    def _wb(self, wx: float, wy: float) -> Tuple[int, int]:
+        """World coordinates → bake surface coordinates (integer)."""
+        return (int(wx * self._scale), int(wy * self._scale))
 
-        # ISO diamond world-unit dimensions: width = W+H, height = (W+H)/2
-        dw = float(ww + wh)
-        dh = dw * 0.5
-
-        s_w = sw * 0.96 / dw
-        s_h = usable_h * 0.96 / dh
-        self._iso_s = min(s_w, s_h)
-        s = self._iso_s
-
-        # Center diamond horizontally:
-        #   diamond x-center = iso_ox + (W - H) * s / 2 = sw / 2
-        self._iso_ox = sw / 2.0 - (ww - wh) * s / 2.0
-        # Position with upward bias (leave room for HUD below)
-        self._iso_oy = (usable_h - dh * s) * 0.35 + 8.0
-
-    def _diamond_corners(self) -> List[Tuple[int, int]]:
-        """Four screen-space corners of the world rectangle in ISO projection."""
-        ww, wh = self._def.width, self._def.height
-        return [
-            (int(px), int(py))
-            for px, py in [
-                self.project(0,  0),
-                self.project(ww, 0),
-                self.project(ww, wh),
-                self.project(0,  wh),
-            ]
-        ]
+    def _wbs(self, v) -> int:
+        """Scale a scalar world value to bake-surface pixels (minimum 1)."""
+        return max(1, int(float(v) * self._scale))
 
     # ------------------------------------------------------------------
     # Static bake helpers
@@ -158,32 +150,21 @@ class MapRenderer:
         b  = p.get("base",  (88, 138, 62))
         lt = p.get("light", (106, 158, 74))
         dk = p.get("dark",  (64, 108, 44))
-        sw, sh = self._screen_w, self._screen_h
+        bw, bh = self._bake_w, self._bake_h
 
-        # Background (outside diamond)
-        surf.fill(_lerp(dk, (18, 26, 14), 0.7))
+        surf.fill(b)
 
-        # ISO diamond as base fill
-        diamond = self._diamond_corners()
-        pg.draw.polygon(surf, b, diamond)
-
-        # Bounding box of diamond for scatter
-        x0 = min(v[0] for v in diamond)
-        y0 = min(v[1] for v in diamond)
-        x1 = max(v[0] for v in diamond)
-        y1 = max(v[1] for v in diamond)
-        area = max(1, (x1 - x0) * (y1 - y0))
-
-        # Two-pass organic scatter (blobs then fine stipple)
+        # Two-pass organic scatter over the full bake surface
+        area = bw * bh
         for _ in range(int(area / 1200)):
-            x = int(rng.uniform(x0, x1))
-            y = int(rng.uniform(y0, y1))
+            x = int(rng.uniform(0, bw))
+            y = int(rng.uniform(0, bh))
             r = rng.randint(18, 52)
             c = _lerp(b, lt if rng.random() < 0.5 else dk, rng.random() * 0.18)
             pg.draw.circle(surf, c, (x, y), r)
         for _ in range(int(area / 160)):
-            x = int(rng.uniform(x0, x1))
-            y = int(rng.uniform(y0, y1))
+            x = int(rng.uniform(0, bw))
+            y = int(rng.uniform(0, bh))
             r = rng.randint(2, 7)
             c = _lerp(b, lt if rng.random() < 0.5 else dk, rng.random() * 0.13)
             pg.draw.circle(surf, c, (x, y), r)
@@ -197,47 +178,37 @@ class MapRenderer:
         lt = p.get("light", (188, 162, 104))
         dk = p.get("dark",  (132, 106, 62))
 
-        # Project all four corners into screen space
-        corners = [
-            (int(px), int(py))
-            for px, py in [
-                self.project(x,     y),
-                self.project(x + w, y),
-                self.project(x + w, y + h),
-                self.project(x,     y + h),
-            ]
-        ]
-        self._pg.draw.polygon(surf, b, corners)
+        bx, by = self._wb(x, y)
+        bw, bh = self._wbs(w), self._wbs(h)
+        self._pg.draw.rect(surf, b, (bx, by, bw, bh))
 
-        # Scatter within bounding box
-        cx0 = min(v[0] for v in corners); cx1 = max(v[0] for v in corners)
-        cy0 = min(v[1] for v in corners); cy1 = max(v[1] for v in corners)
-        area = max(1, (cx1 - cx0) * (cy1 - cy0))
+        # Organic scatter inside rect
+        area = max(1, bw * bh)
         for _ in range(int(area / 260)):
-            rx = int(rng.uniform(cx0, cx1))
-            ry = int(rng.uniform(cy0, cy1))
+            rx = int(rng.uniform(bx, bx + bw))
+            ry = int(rng.uniform(by, by + bh))
             rr = rng.randint(5, 16)
             t2 = rng.random()
             c = _lerp(b, lt, t2 * 0.35) if t2 < 0.4 else (_lerp(b, dk, t2 * 0.25) if t2 < 0.7 else b)
             self._pg.draw.circle(surf, c, (rx, ry), rr)
 
-        # ISO highlight/shadow edges
-        self._pg.draw.line(surf, lt, corners[0], corners[1], 3)  # top
-        self._pg.draw.line(surf, lt, corners[0], corners[3], 3)  # left
-        self._pg.draw.line(surf, dk, corners[2], corners[3], 3)  # bottom
-        self._pg.draw.line(surf, dk, corners[1], corners[2], 3)  # right
+        # Edge highlight / shadow
+        self._pg.draw.line(surf, lt, (bx,      by),      (bx + bw, by),      3)  # top
+        self._pg.draw.line(surf, lt, (bx,      by),      (bx,      by + bh), 3)  # left
+        self._pg.draw.line(surf, dk, (bx,      by + bh), (bx + bw, by + bh), 3)  # bottom
+        self._pg.draw.line(surf, dk, (bx + bw, by),      (bx + bw, by + bh), 3)  # right
 
     def _bake_circle(self, surf, layer: LayerDef, rng: random.Random) -> None:
         if layer.center is None:
             return
-        pcx, pcy = self.project(layer.center[0], layer.center[1])
-        r  = int(layer.radius * self._iso_s * 1.4)
+        pcx, pcy = self._wb(layer.center[0], layer.center[1])
+        r  = self._wbs(layer.radius)
         p  = layer.effective_palette
         b  = p.get("base",  (46,  92, 38))
         lt = p.get("light", (58, 112, 46))
         dk = p.get("dark",  (32,  68, 26))
 
-        self._pg.draw.circle(surf, b, (int(pcx), int(pcy)), r)
+        self._pg.draw.circle(surf, b, (pcx, pcy), r)
         for _ in range(int(r * 0.7)):
             angle = rng.random() * math.tau
             dist  = rng.random() * r * 0.85
@@ -248,65 +219,34 @@ class MapRenderer:
             self._pg.draw.circle(surf, shade, (tx, ty), cr)
         self._pg.draw.arc(
             surf, lt,
-            (int(pcx) - r, int(pcy) - r, r * 2, r * 2),
+            (pcx - r, pcy - r, r * 2, r * 2),
             math.radians(110), math.radians(200),
             max(2, r // 14),
         )
 
     def _bake_road(self, surf, layer: LayerDef) -> None:
-        world_pts  = [(int(p[0]), int(p[1])) for p in layer.points]
-        smooth_w   = _chaikin(world_pts, iterations=1)
-        projected  = [(int(px), int(py)) for px, py in (self.project(x, y) for x, y in smooth_w)]
+        world_pts = [(int(p[0]), int(p[1])) for p in layer.points]
+        smooth_w  = _chaikin(world_pts, iterations=1)
+        bake_pts  = [self._wb(wx, wy) for wx, wy in smooth_w]
         p  = layer.effective_palette
         edge  = p.get("edge",  (152, 128, 72))
         fill  = p.get("fill",  (192, 170, 110))
-        ew = int(p.get("edge_width", 10))
-        fw = int(p.get("fill_width",  6))
-        for i in range(len(projected) - 1):
-            self._pg.draw.line(surf, edge, projected[i], projected[i + 1], ew)
-        for i in range(len(projected) - 1):
-            self._pg.draw.line(surf, fill, projected[i], projected[i + 1], fw)
+        ew = self._wbs(p.get("edge_width", 10))
+        fw = self._wbs(p.get("fill_width",  6))
+        for i in range(len(bake_pts) - 1):
+            self._pg.draw.line(surf, edge, bake_pts[i], bake_pts[i + 1], ew)
+        for i in range(len(bake_pts) - 1):
+            self._pg.draw.line(surf, fill, bake_pts[i], bake_pts[i + 1], fw)
 
     def _bake_polygon(self, surf, layer: LayerDef) -> None:
         if not layer.points:
             return
-        pts = [(int(px), int(py)) for px, py in (self.project(p[0], p[1]) for p in layer.points)]
+        pts = [self._wb(p[0], p[1]) for p in layer.points]
         p = layer.effective_palette
         self._pg.draw.polygon(surf, p.get("base", (80, 120, 60)), pts)
 
     # ------------------------------------------------------------------
-    # ISO corner vignette
-    # ------------------------------------------------------------------
-
-    def _bake_iso_vignette(self, surf, sw: int, sh: int) -> None:
-        """Darken the four corners outside the ISO diamond with a soft alpha mask."""
-        pg = self._pg
-        diamond = self._diamond_corners()
-
-        mask = pg.Surface((sw, sh), pg.SRCALPHA)
-        mask.fill((0, 0, 0, 200))
-        # Transparent cut-out over the diamond area
-        pg.draw.polygon(mask, (0, 0, 0, 0), diamond)
-
-        # Soft inner glow: progressively lighter rings inward from the edge
-        cx = sum(v[0] for v in diamond) // 4
-        cy = sum(v[1] for v in diamond) // 4
-        for i in range(1, 20):
-            t  = i / 20.0
-            inner = [
-                (int(v[0] + (cx - v[0]) * t * 0.08),
-                 int(v[1] + (cy - v[1]) * t * 0.08))
-                for v in diamond
-            ]
-            alpha = int(120 * (1 - t))
-            pg.draw.polygon(mask, (0, 0, 0, alpha), inner, 3)
-
-        surf.blit(mask, (0, 0))
-        # Hard border
-        pg.draw.polygon(surf, (12, 18, 10), diamond, 2)
-
-    # ------------------------------------------------------------------
-    # Animated base bake (bank color — per-frame shimmer drawn live)
+    # Animated base bake (static bank color drawn once)
     # ------------------------------------------------------------------
 
     def _bake_animated_base(self, surf, layer: LayerDef) -> None:
@@ -317,11 +257,11 @@ class MapRenderer:
         smoothed = self._smoothed.get(layer.id)
         if not smoothed:
             return
-        p  = layer.effective_palette
-        bank  = p.get("bank",  (118,  96,  58))
-        deep  = p.get("deep",  (54,  102, 178))
-        bw = int(p.get("bank_width",  24))
-        ww = int(p.get("water_width", 15))
+        p    = layer.effective_palette
+        bank = p.get("bank",  (118,  96,  58))
+        deep = p.get("deep",  (54,  102, 178))
+        bw   = self._wbs(p.get("bank_width",  24))
+        ww   = self._wbs(p.get("water_width", 15))
         for i in range(len(smoothed) - 1):
             self._pg.draw.line(surf, bank, smoothed[i], smoothed[i + 1], bw)
         for i in range(len(smoothed) - 1):
@@ -344,11 +284,15 @@ class MapRenderer:
         shimmer_color = p.get("light", (88, 148, 220))
         speed = float(p.get("shimmer_speed", 55.0))
 
-        # Arc-length parameterisation so dashes are evenly spaced
+        # Apply camera offset to produce screen-space points
+        cx, cy = int(self._cam_x), int(self._cam_y)
+        screen_pts = [(bx - cx, by - cy) for bx, by in smoothed]
+
+        # Arc-length parameterisation for evenly-spaced dashes
         lengths = [0.0]
-        for i in range(len(smoothed) - 1):
-            dx = smoothed[i + 1][0] - smoothed[i][0]
-            dy = smoothed[i + 1][1] - smoothed[i][1]
+        for i in range(len(screen_pts) - 1):
+            dx = screen_pts[i + 1][0] - screen_pts[i][0]
+            dy = screen_pts[i + 1][1] - screen_pts[i][1]
             lengths.append(lengths[-1] + math.hypot(dx, dy))
         total = lengths[-1]
         if total < 1.0:
@@ -358,13 +302,12 @@ class MapRenderer:
         dash_len = 12.0
         offset   = (t * speed) % spacing
 
-        # One SRCALPHA surface for all shimmer dashes (avoid per-dash allocation)
         overlay = self._pg.Surface((self._screen_w, self._screen_h), self._pg.SRCALPHA)
         dist = offset
         while dist < total:
             d_end = min(dist + dash_len, total)
-            ps = _pos_at(smoothed, lengths, dist)
-            pe = _pos_at(smoothed, lengths, d_end)
+            ps = _pos_at(screen_pts, lengths, dist)
+            pe = _pos_at(screen_pts, lengths, d_end)
             alpha = int(130 + 70 * math.sin(dist * 0.16 + t * 1.6))
             self._pg.draw.line(
                 overlay,

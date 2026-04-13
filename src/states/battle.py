@@ -13,7 +13,7 @@ from ..core.gamestate import GameState, StateType
 
 
 class BattleState(GameState):
-    """Squad-based strategic map with terrain background, ISO building sprites, and squad tokens."""
+    """Squad-based strategic map with terrain background, building sprites, and squad tokens."""
 
     _SCENARIO_ID = "ch1_asterhold_gate"
 
@@ -24,9 +24,7 @@ class BattleState(GameState):
 
         from ..strategy.mission_loader import load_mission
         self.mission = load_mission(self._SCENARIO_ID, chapter=self.session.chapter)
-        # Inject player squads from session squad plans; keep only enemy squads from config
         player_squads = self.session.build_player_squads()
-        # Position player squads near the player base site with staggered offsets
         base_site = self.mission.sites.get("player_base")
         base_x = base_site.x if base_site else 120.0
         base_y = base_site.y if base_site else 360.0
@@ -42,13 +40,20 @@ class BattleState(GameState):
 
         self._map_renderer = None
         self._sprites = None
-        self._map_cfg: Optional[dict] = None
+        # Camera scroll state (pixels into the baked map surface)
+        self._cam_x: float = 0.0
+        self._cam_y: float = 0.0
+        self._cam_max_x: float = 0.0
+        self._cam_max_y: float = 0.0
+        # Which edges are currently being scrolled: [left, right, up, down]
+        self._scroll_flags: List[bool] = [False, False, False, False]
+        self._screen_size: tuple = (1280, 720)
 
         if PYGAME_AVAILABLE:
-            self.title_font  = pygame.font.Font(None, 42)
-            self.body_font   = pygame.font.Font(None, 28)
-            self.small_font  = pygame.font.Font(None, 22)
-            self.digit_font  = pygame.font.Font(None, 36)
+            self.title_font = pygame.font.Font(None, 42)
+            self.body_font  = pygame.font.Font(None, 28)
+            self.small_font = pygame.font.Font(None, 22)
+            self.digit_font = pygame.font.Font(None, 36)
         else:
             self.title_font = self.body_font = self.small_font = self.digit_font = None
 
@@ -83,6 +88,13 @@ class BattleState(GameState):
         map_def = MapDef.from_dict(map_section)
         self._map_renderer = MapRenderer(map_def, pygame)
         self._map_renderer.bake(sw, sh)
+
+        _HUD_H = 54
+        self._cam_max_x, self._cam_max_y = self._map_renderer.cam_max(sw, sh - _HUD_H)
+        self._screen_size = (sw, sh)
+        # Start camera centred on the baked map
+        self._cam_x = min(self._cam_max_x, max(0.0, (self._map_renderer._bake_w - sw) / 2.0))
+        self._cam_y = min(self._cam_max_y, max(0.0, (self._map_renderer._bake_h - (sh - _HUD_H)) / 2.0))
 
     # ------------------------------------------------------------------
     # Helpers
@@ -120,7 +132,7 @@ class BattleState(GameState):
             self.engine.change_state(TownState(session=self.session, status_message=message))
 
     def _p(self, wx: float, wy: float) -> tuple:
-        """Project world coordinate to isometric screen coordinate."""
+        """Project world coordinate to screen coordinate (accounts for camera)."""
         if self._map_renderer is not None:
             px, py = self._map_renderer.project(wx, wy)
             return (int(px), int(py))
@@ -178,6 +190,26 @@ class BattleState(GameState):
         if self.paused:
             return
         self.enemy_order_timer += delta_time
+
+        # Edge-scroll: update camera from mouse position
+        if PYGAME_AVAILABLE:
+            _ZONE  = 60      # px from edge that triggers scrolling
+            _SPEED = 300.0   # bake-surface px / sec
+            sw2, sh2 = self._screen_size
+            mx, my = pygame.mouse.get_pos()
+            self._scroll_flags[0] = mx < _ZONE
+            self._scroll_flags[1] = mx > sw2 - _ZONE
+            self._scroll_flags[2] = my < _ZONE
+            self._scroll_flags[3] = my > sh2 - 54 - _ZONE
+            if self._scroll_flags[0]:
+                self._cam_x = max(0.0, self._cam_x - _SPEED * delta_time)
+            if self._scroll_flags[1]:
+                self._cam_x = min(self._cam_max_x, self._cam_x + _SPEED * delta_time)
+            if self._scroll_flags[2]:
+                self._cam_y = max(0.0, self._cam_y - _SPEED * delta_time)
+            if self._scroll_flags[3]:
+                self._cam_y = min(self._cam_max_y, self._cam_y + _SPEED * delta_time)
+
         if self.enemy_order_timer >= 2.0:
             self.enemy_order_timer = 0.0
             self._issue_enemy_orders()
@@ -203,6 +235,7 @@ class BattleState(GameState):
 
         # 1. Terrain background (static bake + animated overlays)
         if self._map_renderer is not None:
+            self._map_renderer.set_camera(self._cam_x, self._cam_y)
             self._map_renderer.render(screen, self.mission.time_elapsed)
         else:
             screen.fill((64, 100, 48))
@@ -246,9 +279,7 @@ class BattleState(GameState):
             bx_s, by_s = self._p(site.x, site.y)
             if self._sprites is not None:
                 building = self._sprites.site_building(stype, site.owner, sw_s, sh_s)
-                bx = bx_s - sw_s // 2
-                by = by_s - sh_s + 16
-                screen.blit(building, (bx, by))
+                screen.blit(building, (bx_s - sw_s // 2, by_s - sh_s + 16))
             if 0.0 < site.capture_progress < 100.0:
                 self._draw_capture_ring(screen, site)
             if self.small_font is not None:
@@ -263,7 +294,7 @@ class BattleState(GameState):
         # 6. Intercept forecast
         self._render_intercept_forecast(screen)
 
-        # 7. Squad tokens
+        # 7. Squad tokens + order lines
         selected = self._selected_squad()
         order_surf = pygame.Surface((width, height), pygame.SRCALPHA)
         for squad in self.mission.squads:
@@ -280,8 +311,7 @@ class BattleState(GameState):
                 target = self.mission.sites[squad.target_site_id]
                 lc3 = (120, 190, 255, 150) if squad.owner == 0 else (255, 120, 100, 110)
                 pygame.draw.line(order_surf, lc3,
-                                 (sx, sy - 14),
-                                 self._p(target.x, target.y), 1)
+                                 (sx, sy - 14), self._p(target.x, target.y), 1)
             if self.small_font is not None and selected is not None and squad.id == selected.id:
                 tag = self.small_font.render(squad.name, True, (255, 240, 140))
                 screen.blit(tag, (sx - tag.get_width() // 2, sy - 58))
@@ -289,6 +319,9 @@ class BattleState(GameState):
 
         # 8. HUD
         self._render_hud(screen, width, height)
+
+        # 9. Edge-scroll arrows (on top of everything)
+        self._render_scroll_arrows(screen, width, height)
 
     # ------------------------------------------------------------------
     # Overlay / VFX
@@ -357,6 +390,49 @@ class BattleState(GameState):
         screen.blit(arc_surf, (cx - r - 2, cy - r - 2))
 
     # ------------------------------------------------------------------
+    # Scroll arrows
+    # ------------------------------------------------------------------
+
+    def _render_scroll_arrows(self, screen, width: int, height: int) -> None:
+        """Draw pulsing golden arrows at edges that are actively scrolling."""
+        if not any(self._scroll_flags):
+            return
+        pg = pygame
+        pulse = 0.5 + 0.5 * math.sin(self.mission.time_elapsed * 5.0)
+        hud_h = 54
+        cx  = width // 2
+        cy  = (height - hud_h) // 2
+        sz  = 26   # half-width of arrow base
+        pad = 18   # tip distance from screen edge
+
+        # (flag_idx, tip, base_left, base_right)
+        arrow_defs = [
+            (0, (pad,             cy),
+                (pad + sz, cy - sz),  (pad + sz, cy + sz)),            # left
+            (1, (width - pad,     cy),
+                (width - pad - sz, cy - sz), (width - pad - sz, cy + sz)),  # right
+            (2, (cx,              pad),
+                (cx - sz, pad + sz),  (cx + sz, pad + sz)),            # up
+            (3, (cx, height - hud_h - pad),
+                (cx - sz, height - hud_h - pad - sz),
+                (cx + sz, height - hud_h - pad - sz)),                  # down
+        ]
+
+        overlay = pg.Surface((width, height), pg.SRCALPHA)
+        for flag_idx, tip, bl, br in arrow_defs:
+            if not self._scroll_flags[flag_idx]:
+                continue
+            tri = [tip, bl, br]
+            alpha_main = int(200 + 55 * pulse)
+            alpha_glow = int(55 * pulse)
+            for expansion in (12, 8, 4):
+                eg = _expand_triangle(tri, expansion)
+                pg.draw.polygon(overlay, (255, 220, 80, alpha_glow), eg)
+            pg.draw.polygon(overlay, (255, 220, 60, alpha_main), tri)
+            pg.draw.polygon(overlay, (255, 255, 200, 230), tri, 2)
+        screen.blit(overlay, (0, 0))
+
+    # ------------------------------------------------------------------
     # HUD
     # ------------------------------------------------------------------
 
@@ -382,7 +458,6 @@ class BattleState(GameState):
             lbl = self.small_font.render("DAYS", True, (175, 148, 78))
             screen.blit(lbl, (clock_x + 22, clock_y + 9))
 
-        # Bottom strip
         strip_h = 54
         strip_surf = pygame.Surface((width, strip_h), pygame.SRCALPHA)
         strip_surf.fill((8, 10, 16, 195))
@@ -436,3 +511,18 @@ class BattleState(GameState):
             return math.hypot(px - ax, py - ay)
         t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / seg_sq))
         return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+
+def _expand_triangle(pts, amount: float):
+    """Expand a triangle outward from its centroid by *amount* pixels."""
+    cx = sum(p[0] for p in pts) / 3.0
+    cy = sum(p[1] for p in pts) / 3.0
+    result = []
+    for px, py in pts:
+        dx, dy = px - cx, py - cy
+        d = math.hypot(dx, dy)
+        if d < 1e-9:
+            result.append((int(px), int(py)))
+        else:
+            result.append((int(px + dx / d * amount), int(py + dy / d * amount)))
+    return result
