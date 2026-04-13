@@ -45,6 +45,9 @@ class BattleState(GameState):
         self._cam_y: float = 0.0
         self._cam_max_x: float = 0.0
         self._cam_max_y: float = 0.0
+        self._zoom: float = 0.95
+        self._zoom_min: float = 0.55
+        self._zoom_max: float = 1.45
         # Which edges are currently being scrolled: [left, right, up, down]
         self._scroll_flags: List[bool] = [False, False, False, False]
         self._screen_size: tuple = (1280, 720)
@@ -87,14 +90,42 @@ class BattleState(GameState):
 
         map_def = MapDef.from_dict(map_section)
         self._map_renderer = MapRenderer(map_def, pygame)
+        self._map_renderer.set_zoom(self._zoom)
         self._map_renderer.bake(sw, sh)
 
         _HUD_H = 54
         self._cam_max_x, self._cam_max_y = self._map_renderer.cam_max(sw, sh - _HUD_H)
         self._screen_size = (sw, sh)
-        # Start camera centred on the baked map
-        self._cam_x = min(self._cam_max_x, max(0.0, (self._map_renderer._bake_w - sw) / 2.0))
-        self._cam_y = min(self._cam_max_y, max(0.0, (self._map_renderer._bake_h - (sh - _HUD_H)) / 2.0))
+        # Start camera centered on the player's main base.
+        player_base = self.mission.sites.get("player_base") if self.mission.sites else None
+        if player_base is not None:
+            focus_x, focus_y = self._map_renderer.project(player_base.x, player_base.y)
+        elif self.mission.sites:
+            xs = [site.x for site in self.mission.sites.values()]
+            ys = [site.y for site in self.mission.sites.values()]
+            wx = (min(xs) + max(xs)) * 0.5
+            wy = (min(ys) + max(ys)) * 0.5
+            focus_x, focus_y = self._map_renderer.project(wx, wy)
+        else:
+            focus_x = self._map_renderer._bake_w * 0.5
+            focus_y = self._map_renderer._bake_h * 0.5
+        self._cam_x = min(self._cam_max_x, max(0.0, focus_x - sw * 0.5))
+        self._cam_y = min(self._cam_max_y, max(0.0, focus_y - (sh - _HUD_H) * 0.5))
+
+    def _rebake_for_zoom(self) -> None:
+        if self._map_renderer is None:
+            return
+        sw, sh = self._screen_size
+        hud_h = 54
+        old_center_x = self._cam_x + sw * 0.5
+        old_center_y = self._cam_y + (sh - hud_h) * 0.5
+
+        self._map_renderer.set_zoom(self._zoom)
+        self._map_renderer.bake(sw, sh)
+        self._cam_max_x, self._cam_max_y = self._map_renderer.cam_max(sw, sh - hud_h)
+
+        self._cam_x = min(self._cam_max_x, max(0.0, old_center_x - sw * 0.5))
+        self._cam_y = min(self._cam_max_y, max(0.0, old_center_y - (sh - hud_h) * 0.5))
 
     # ------------------------------------------------------------------
     # Helpers
@@ -148,6 +179,13 @@ class BattleState(GameState):
     def handle_event(self, event) -> None:
         if not PYGAME_AVAILABLE:
             return
+        if event.type == pygame.MOUSEWHEEL:
+            old_zoom = self._zoom
+            self._zoom = max(self._zoom_min, min(self._zoom_max, self._zoom + event.y * 0.1))
+            if abs(self._zoom - old_zoom) > 1e-6:
+                self._rebake_for_zoom()
+                self.status_message = f"Zoom {int(self._zoom * 100)}%"
+            return
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_SPACE:
                 self.paused = not self.paused
@@ -187,14 +225,10 @@ class BattleState(GameState):
                         self.status_message = f"{sel.name} to {self.mission.sites[site_id].name}."
 
     def update(self, delta_time: float) -> None:
-        if self.paused:
-            return
-        self.enemy_order_timer += delta_time
-
-        # Edge-scroll: update camera from mouse position
+        # Edge-scroll: update camera from mouse position (works even while paused).
         if PYGAME_AVAILABLE:
             _ZONE  = 60      # px from edge that triggers scrolling
-            _SPEED = 300.0   # bake-surface px / sec
+            _SPEED = 520.0   # bake-surface px / sec
             sw2, sh2 = self._screen_size
             mx, my = pygame.mouse.get_pos()
             self._scroll_flags[0] = mx < _ZONE
@@ -209,6 +243,10 @@ class BattleState(GameState):
                 self._cam_y = max(0.0, self._cam_y - _SPEED * delta_time)
             if self._scroll_flags[3]:
                 self._cam_y = min(self._cam_max_y, self._cam_y + _SPEED * delta_time)
+
+        if self.paused:
+            return
+        self.enemy_order_timer += delta_time
 
         if self.enemy_order_timer >= 2.0:
             self.enemy_order_timer = 0.0

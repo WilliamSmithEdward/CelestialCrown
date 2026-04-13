@@ -45,15 +45,38 @@ class MapRenderer:
         # Smoothed paths in BAKE space (world * scale). Camera offset applied at render time.
         self._smoothed: Dict[str, List[Tuple[int, int]]] = {}
         self._scale: float = MAP_SCALE
+        self._zoom: float = 1.0
         # Camera offset in bake-surface pixels (set each frame via set_camera)
         self._cam_x: float = 0.0
         self._cam_y: float = 0.0
         # Baked surface dimensions (set in bake())
         self._bake_w: int = map_def.width
         self._bake_h: int = map_def.height
+        self._map_w: int = map_def.width
+        self._map_h: int = map_def.height
+        self._pad_x: int = 0
+        self._pad_y: int = 0
         # Viewport dimensions (set in bake())
         self._screen_w: int = map_def.width
         self._screen_h: int = map_def.height
+        self._void_brush_cache: Dict[Tuple[int, Tuple[int, int, int], int], Any] = {}
+        # Precomputed starfield + dust for the void background.
+        rng = random.Random(map_def.seed + 991)
+        self._void_stars = [
+            (
+                rng.random(),
+                rng.random(),
+                rng.random() * math.tau,
+                rng.choice((1, 1, 1, 2, 2, 3)),
+                rng.randint(90, 220),
+                rng.choice((0, 1, 2)),
+            )
+            for _ in range(220)
+        ]
+        self._void_dust = [
+            (rng.random(), rng.random(), rng.random() * math.tau, rng.randint(18, 52), rng.randint(10, 24))
+            for _ in range(36)
+        ]
 
     # ------------------------------------------------------------------
     # Public API
@@ -61,7 +84,15 @@ class MapRenderer:
 
     def project(self, wx: float, wy: float) -> Tuple[float, float]:
         """Convert world coordinates to current screen coordinates."""
-        return (wx * self._scale - self._cam_x, wy * self._scale - self._cam_y)
+        s = self._effective_scale()
+        return (wx * s + self._pad_x - self._cam_x, wy * s + self._pad_y - self._cam_y)
+
+    def set_zoom(self, zoom: float) -> None:
+        """Set map zoom factor used for baking and projection."""
+        self._zoom = max(0.4, min(2.5, float(zoom)))
+
+    def get_zoom(self) -> float:
+        return self._zoom
 
     def set_camera(self, cam_x: float, cam_y: float) -> None:
         """Set camera scroll offset (bake-surface pixels)."""
@@ -81,11 +112,18 @@ class MapRenderer:
         sh = screen_h or self._def.height
         self._screen_w = sw
         self._screen_h = sh
-        self._bake_w = int(self._def.width * self._scale)
-        self._bake_h = int(self._def.height * self._scale)
+        s = self._effective_scale()
+        self._map_w = int(self._def.width * s)
+        self._map_h = int(self._def.height * s)
+        # Padding lets camera center near-edge points and reveals void outside map edges.
+        self._pad_x = max(180, sw // 2)
+        self._pad_y = max(120, (sh - 54) // 2)
+        self._bake_w = self._map_w + self._pad_x * 2
+        self._bake_h = self._map_h + self._pad_y * 2
 
         pg = self._pg
-        surf = pg.Surface((self._bake_w, self._bake_h))
+        surf = pg.Surface((self._bake_w, self._bake_h), pg.SRCALPHA)
+        surf.fill((0, 0, 0, 0))
         rng = random.Random(self._def.seed)
 
         for layer in self._def.layers:
@@ -94,10 +132,7 @@ class MapRenderer:
                 if layer.points:
                     world_pts = [(int(p[0]), int(p[1])) for p in layer.points]
                     smooth_world = _chaikin(world_pts, iterations=3)
-                    self._smoothed[layer.id] = [
-                        (int(wx * self._scale), int(wy * self._scale))
-                        for wx, wy in smooth_world
-                    ]
+                    self._smoothed[layer.id] = [self._wb(wx, wy) for wx, wy in smooth_world]
                 self._bake_animated_base(surf, layer)
             else:
                 self._bake_static_layer(surf, layer, rng)
@@ -106,8 +141,8 @@ class MapRenderer:
 
     def render(self, screen, time_elapsed: float) -> None:
         """Blit the static surface (panned by camera) then composite animated layers."""
+        self._render_void_background(screen, time_elapsed)
         if self._static_surf is None:
-            screen.fill((22, 32, 18))
             return
         cx, cy = int(self._cam_x), int(self._cam_y)
         screen.blit(self._static_surf, (-cx, -cy))
@@ -115,17 +150,155 @@ class MapRenderer:
             if layer.animated:
                 self._render_animated_layer(screen, layer, time_elapsed)
 
+    def _render_void_background(self, screen, t: float) -> None:
+        """Draw a dark-purple outerspace backdrop with layered shimmer and parallax."""
+        sw, sh = screen.get_size()
+        # Base fill and radial depth gradient.
+        screen.fill((6, 4, 18))
+        vignette = self._pg.Surface((sw, sh), self._pg.SRCALPHA)
+        cx, cy = sw // 2, sh // 2
+        max_r = int(math.hypot(cx, cy))
+        for i in range(7):
+            frac = i / 6.0
+            r = int(max_r * (0.25 + frac * 0.85))
+            a = int(34 + 24 * frac)
+            col = (6, 4, 16, a)
+            self._pg.draw.circle(vignette, col, (cx, cy), r, width=max(8, int(max_r * 0.05)))
+        screen.blit(vignette, (0, 0))
+
+        # Animated nebula flow ribbons built from layered glow passes.
+        haze = self._pg.Surface((sw, sh), self._pg.SRCALPHA)
+        for idx, (base_y, amp1, amp2, speed, phase, radius, c0, c1) in enumerate([
+            (0.23, 34.0, 18.0, 0.11, 0.2, 72, (66, 20, 126), (126, 58, 176)),
+            (0.58, 42.0, 22.0, 0.09, 1.6, 84, (58, 18, 116), (112, 50, 164)),
+            (0.79, 28.0, 16.0, 0.13, 2.7, 64, (50, 16, 104), (98, 44, 148)),
+        ]):
+            points = []
+            for x in range(-24, sw + 25, 8):
+                xf = x / max(1, sw)
+                y = (
+                    sh * base_y
+                    + math.sin(xf * math.tau * 1.55 + t * speed + phase) * amp1
+                    + math.sin(xf * math.tau * 3.85 - t * (speed * 0.75) + phase * 1.5) * amp2
+                )
+                points.append((x, y))
+            self._draw_nebula_ribbon(haze, points, radius, c0, c1, t, idx)
+        screen.blit(haze, (0, 0))
+
+        # Multi-layer starfield with subtle parallax from camera movement.
+        star_overlay = self._pg.Surface((sw, sh), self._pg.SRCALPHA)
+        for nx, ny, phase, radius, base_alpha, layer in self._void_stars:
+            if layer == 0:
+                parallax = 0.02
+                color = (188, 170, 245)
+            elif layer == 1:
+                parallax = 0.05
+                color = (224, 204, 255)
+            else:
+                parallax = 0.08
+                color = (245, 234, 255)
+
+            x = int((nx * sw) - self._cam_x * parallax) % sw
+            y = int((ny * sh) - self._cam_y * parallax) % sh
+            tw = 0.55 + 0.45 * math.sin(t * (2.2 + layer * 0.9) + phase)
+            a = max(20, min(255, int(base_alpha * tw)))
+            self._pg.draw.circle(star_overlay, (*color, a), (x, y), radius)
+            if radius >= 2 and layer == 2:
+                # Stronger cinematic bloom on bright foreground stars.
+                bloom_a = min(255, a + 56)
+                self._pg.draw.circle(star_overlay, (*color, max(24, a // 4)), (x, y), radius + 2)
+                self._pg.draw.line(star_overlay, (*color, bloom_a), (x - 4, y), (x + 4, y), 1)
+                self._pg.draw.line(star_overlay, (*color, bloom_a), (x, y - 4), (x, y + 4), 1)
+        screen.blit(star_overlay, (0, 0))
+
+        # Fine sparkle mist to prevent flat areas between nebula bands.
+        mist = self._pg.Surface((sw, sh), self._pg.SRCALPHA)
+        for i in range(80):
+            x = int(((i * 0.6180339) % 1.0) * sw)
+            y = int(((i * 0.3819660 + 0.23) % 1.0) * sh)
+            a = int(12 + 10 * (0.5 + 0.5 * math.sin(t * 0.9 + i)))
+            self._pg.draw.circle(mist, (170, 150, 220, a), (x, y), 1)
+        screen.blit(mist, (0, 0))
+
+    def _draw_nebula_ribbon(self, surf, points, radius: int, c0, c1, t: float, idx: int) -> None:
+        """Draw smooth ribbon gradients using layered soft-brush stamps."""
+        pg = self._pg
+        # Outer to inner glow passes; each pass uses a soft radial alpha brush.
+        passes = [
+            (1.08, 34, 0.18),
+            (0.72, 52, 0.46),
+            (0.44, 72, 0.78),
+        ]
+        # Pulse between low/high transparency states per ribbon.
+        pulse_mix = 0.5 + 0.5 * math.sin(t * 2.1 + idx * 1.35)
+        alpha_mult = 0.62 + 0.46 * pulse_mix
+        for scale, alpha, mix in passes:
+            r = max(2, int(radius * scale))
+            col = _lerp(c0, c1, mix)
+            pulsed_alpha = max(1, min(255, int(alpha * alpha_mult)))
+            brush = self._get_soft_brush(r, col, pulsed_alpha)
+            bw = brush.get_width()
+            spacing = max(2, int(r * 0.33))
+
+            for i in range(len(points) - 1):
+                x0, y0 = points[i]
+                x1, y1 = points[i + 1]
+                dx = x1 - x0
+                dy = y1 - y0
+                seg_len = math.hypot(dx, dy)
+                steps = max(1, int(seg_len / spacing))
+                for s in range(steps + 1):
+                    u = s / steps
+                    x = x0 + dx * u
+                    y = y0 + dy * u
+                    # Very small shimmer warp so texture is alive, but still clean.
+                    y += math.sin((i + u) * 0.55 + t * 1.1 + idx) * 0.7
+                    surf.blit(brush, (int(x - bw * 0.5), int(y - bw * 0.5)))
+
+        # No explicit center line; keep ribbon fully gradient-based.
+
+    def _get_soft_brush(self, radius: int, color: Tuple[int, int, int], max_alpha: int):
+        key = (radius, color, max_alpha)
+        cached = self._void_brush_cache.get(key)
+        if cached is not None:
+            return cached
+
+        pg = self._pg
+        size = radius * 2 + 1
+        cx = radius
+        cy = radius
+        brush = pg.Surface((size, size), pg.SRCALPHA)
+        r_f = float(max(1, radius))
+        for py in range(size):
+            dy = py - cy
+            for px in range(size):
+                dx = px - cx
+                d = math.hypot(dx, dy) / r_f
+                if d > 1.0:
+                    continue
+                a = int(max_alpha * ((1.0 - d) ** 2.3))
+                if a > 0:
+                    brush.set_at((px, py), (color[0], color[1], color[2], a))
+
+        self._void_brush_cache[key] = brush
+        return brush
+
     # ------------------------------------------------------------------
     # World → bake coordinate helpers
     # ------------------------------------------------------------------
 
     def _wb(self, wx: float, wy: float) -> Tuple[int, int]:
         """World coordinates → bake surface coordinates (integer)."""
-        return (int(wx * self._scale), int(wy * self._scale))
+        s = self._effective_scale()
+        return (int(wx * s) + self._pad_x, int(wy * s) + self._pad_y)
 
     def _wbs(self, v) -> int:
         """Scale a scalar world value to bake-surface pixels (minimum 1)."""
-        return max(1, int(float(v) * self._scale))
+        s = self._effective_scale()
+        return max(1, int(float(v) * s))
+
+    def _effective_scale(self) -> float:
+        return self._scale * self._zoom
 
     # ------------------------------------------------------------------
     # Static bake helpers
@@ -150,21 +323,22 @@ class MapRenderer:
         b  = p.get("base",  (88, 138, 62))
         lt = p.get("light", (106, 158, 74))
         dk = p.get("dark",  (64, 108, 44))
-        bw, bh = self._bake_w, self._bake_h
+        x0, y0 = self._pad_x, self._pad_y
+        bw, bh = self._map_w, self._map_h
 
-        surf.fill(b)
+        pg.draw.rect(surf, b, (x0, y0, bw, bh))
 
         # Two-pass organic scatter over the full bake surface
         area = bw * bh
         for _ in range(int(area / 1200)):
-            x = int(rng.uniform(0, bw))
-            y = int(rng.uniform(0, bh))
+            x = int(rng.uniform(x0, x0 + bw))
+            y = int(rng.uniform(y0, y0 + bh))
             r = rng.randint(18, 52)
             c = _lerp(b, lt if rng.random() < 0.5 else dk, rng.random() * 0.18)
             pg.draw.circle(surf, c, (x, y), r)
         for _ in range(int(area / 160)):
-            x = int(rng.uniform(0, bw))
-            y = int(rng.uniform(0, bh))
+            x = int(rng.uniform(x0, x0 + bw))
+            y = int(rng.uniform(y0, y0 + bh))
             r = rng.randint(2, 7)
             c = _lerp(b, lt if rng.random() < 0.5 else dk, rng.random() * 0.13)
             pg.draw.circle(surf, c, (x, y), r)
