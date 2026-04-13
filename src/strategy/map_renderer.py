@@ -50,6 +50,7 @@ class MapRenderer:
         self._cam_x: float = 0.0
         self._cam_y: float = 0.0
         self._display_scale: float = 1.0
+        self._fast_scale_mode: bool = False
         self._render_origin_x: float = 0.0
         self._render_origin_y: float = 0.0
         self._render_scale_x: float = 1.0
@@ -126,6 +127,10 @@ class MapRenderer:
         """Set runtime display scale relative to baked pixels."""
         self._display_scale = max(1e-4, float(display_scale))
 
+    def set_fast_scale_mode(self, enabled: bool) -> None:
+        """When enabled, use faster lower-quality scaling for interactive zoom frames."""
+        self._fast_scale_mode = bool(enabled)
+
     def cam_max(self, screen_w: int, screen_h: int) -> Tuple[float, float]:
         """Return (max_cam_x, max_cam_y) for clamping the camera scroll."""
         return (
@@ -186,7 +191,10 @@ class MapRenderer:
         if src_w == sw and src_h == sh:
             screen.blit(view, (0, 0))
         else:
-            scaled = self._pg.transform.smoothscale(view, (sw, sh))
+            if self._fast_scale_mode:
+                scaled = self._pg.transform.scale(view, (sw, sh))
+            else:
+                scaled = self._pg.transform.smoothscale(view, (sw, sh))
             screen.blit(scaled, (0, 0))
         for layer in self._def.layers:
             if layer.animated:

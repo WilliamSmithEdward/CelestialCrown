@@ -55,7 +55,7 @@ class BattleState(GameState):
         self._zoom_visual: float = 0.95
         self._zoom_target: float = 0.95
         self._zoom_sprite_ref: float = 0.95
-        self._zoom_wheel_step: float = 0.12
+        self._zoom_wheel_step: float = 0.07
         self._zoom_min: float = 0.08
         self._zoom_max: float = 2.4
         self._zoom_input_idle: float = 999.0
@@ -338,7 +338,7 @@ class BattleState(GameState):
             )
             # Immediate response to wheel input before per-frame smoothing catches up.
             delta = self._zoom_target - prev_target
-            self._apply_visual_zoom(self._zoom_visual + delta * 0.45)
+            self._apply_visual_zoom(self._zoom_visual + delta * 0.1)
             self.status_message = f"Zoom {int(self._zoom_target * 100)}%"
             return
         if event.type == pygame.KEYDOWN:
@@ -384,7 +384,7 @@ class BattleState(GameState):
 
         # High-FPS zoom preview: animate visual zoom every frame (no rebake stages).
         if abs(self._zoom_target - self._zoom_visual) > 1e-4:
-            blend = 1.0 - math.exp(-22.0 * max(0.0, delta_time))
+            blend = 1.0 - math.exp(-20.0 * max(0.0, delta_time))
             next_zoom_visual = self._zoom_visual + (self._zoom_target - self._zoom_visual) * blend
             if abs(self._zoom_target - next_zoom_visual) < 5e-4:
                 next_zoom_visual = self._zoom_target
@@ -509,6 +509,8 @@ class BattleState(GameState):
             drew_void = True
             self._map_renderer.set_camera(self._cam_x, self._cam_y)
             self._map_renderer.set_display_scale(display_scale)
+            interactive_zoom = self._zoom_input_idle < 0.12 or abs(self._zoom_target - self._zoom_visual) > 0.002
+            self._map_renderer.set_fast_scale_mode(interactive_zoom)
             self._map_renderer.render(scene, self.mission.time_elapsed, render_void=False)
 
             # Derive sprite scaling from actual map on-screen scale after render clamping/fitting.
