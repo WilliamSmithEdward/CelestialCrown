@@ -312,7 +312,7 @@ class MapRenderer:
         """Spawn and draw occasional subtle shooting stars in the void."""
         if self._void_last_t is None:
             self._void_last_t = t
-        dt = max(0.0, min(0.05, t - self._void_last_t))
+        dt = max(0.0, min(0.1, t - self._void_last_t))
         self._void_last_t = t
 
         sw, sh = screen.get_size()
@@ -369,8 +369,8 @@ class MapRenderer:
             dy = vy / vlen
             tail = star["tail"] * (0.55 + 0.45 * p_smooth)
 
-            # Tail with alpha falloff.
-            segs = 10
+            # Tail with denser segments for smoother apparent motion.
+            segs = 18
             for i in range(segs):
                 u0 = i / segs
                 u1 = (i + 1) / segs
@@ -378,7 +378,8 @@ class MapRenderer:
                 y0 = star["y"] - dy * tail * u0
                 x1 = star["x"] - dx * tail * u1
                 y1 = star["y"] - dy * tail * u1
-                a = int(base_a * ((1.0 - u0) ** 1.8))
+                amid = (u0 + u1) * 0.5
+                a = int(base_a * ((1.0 - amid) ** 1.9))
                 self._pg.draw.aaline(overlay, (232, 224, 255, a), (x0, y0), (x1, y1))
 
             # Faint secondary tail for smoother bloom.
