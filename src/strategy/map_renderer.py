@@ -83,6 +83,10 @@ class MapRenderer:
         self._void_shooting: List[Dict[str, float]] = []
         self._void_last_t: Optional[float] = None
         self._void_next_shoot_t: float = self._void_fx_rng.uniform(1.4, 3.6)
+        self._void_cached_surf: Optional[Any] = None
+        self._void_cached_size: Tuple[int, int] = (0, 0)
+        self._void_cached_t: float = -1.0
+        self._void_cache_step: float = 1.0 / 30.0
 
     # ------------------------------------------------------------------
     # Public API
@@ -146,9 +150,10 @@ class MapRenderer:
 
         self._static_surf = surf
 
-    def render(self, screen, time_elapsed: float) -> None:
-        """Blit the static surface (panned by camera) then composite animated layers."""
-        self._render_void_background(screen, time_elapsed)
+    def render(self, screen, time_elapsed: float, render_void: bool = True) -> None:
+        """Blit static + animated map layers; optionally include void background."""
+        if render_void:
+            self._render_void_background(screen, time_elapsed)
         if self._static_surf is None:
             return
         cx, cy = int(self._cam_x), int(self._cam_y)
@@ -156,6 +161,42 @@ class MapRenderer:
         for layer in self._def.layers:
             if layer.animated:
                 self._render_animated_layer(screen, layer, time_elapsed)
+
+    def render_void(self, screen, time_elapsed: float, freeze: bool = False) -> None:
+        """Render only the outer void background, with optional cached freeze mode."""
+        sw, sh = screen.get_size()
+
+        needs_refresh = (
+            self._void_cached_surf is None
+            or self._void_cached_size != (sw, sh)
+            or (not freeze and abs(time_elapsed - self._void_cached_t) >= self._void_cache_step)
+        )
+
+        if needs_refresh:
+            self._void_cached_surf = self._pg.Surface((sw, sh), self._pg.SRCALPHA)
+            self._render_void_background(self._void_cached_surf, time_elapsed)
+            self._void_cached_size = (sw, sh)
+            self._void_cached_t = time_elapsed
+
+        if self._void_cached_surf is not None:
+            screen.blit(self._void_cached_surf, (0, 0))
+            if freeze:
+                # Keep a small amount of motion while avoiding expensive full void redraw.
+                self._render_void_twinkle_overlay(screen, time_elapsed)
+
+    def _render_void_twinkle_overlay(self, screen, t: float) -> None:
+        """Cheap star twinkle overlay used when full void redraw is intentionally frozen."""
+        sw, sh = screen.get_size()
+        overlay = self._pg.Surface((sw, sh), self._pg.SRCALPHA)
+        for i, (nx, ny, phase, radius, base_alpha, layer) in enumerate(self._void_stars):
+            if i % 3 != 0:
+                continue
+            x = int(nx * sw)
+            y = int(ny * sh)
+            tw = 0.55 + 0.45 * math.sin(t * (1.8 + layer * 0.6) + phase)
+            a = max(12, min(150, int(base_alpha * 0.45 * tw)))
+            self._pg.draw.circle(overlay, (226, 210, 255, a), (x, y), max(1, radius - 1))
+        screen.blit(overlay, (0, 0))
 
     def _render_void_background(self, screen, t: float) -> None:
         """Draw a dark-purple outerspace backdrop with layered shimmer and parallax."""
@@ -198,17 +239,15 @@ class MapRenderer:
         star_overlay = self._pg.Surface((sw, sh), self._pg.SRCALPHA)
         for nx, ny, phase, radius, base_alpha, layer in self._void_stars:
             if layer == 0:
-                parallax = 0.02
                 color = (188, 170, 245)
             elif layer == 1:
-                parallax = 0.05
                 color = (224, 204, 255)
             else:
-                parallax = 0.08
                 color = (245, 234, 255)
 
-            x = int((nx * sw) - self._cam_x * parallax) % sw
-            y = int((ny * sh) - self._cam_y * parallax) % sh
+            # Keep void position screen-stable; animate via twinkle only.
+            x = int(nx * sw)
+            y = int(ny * sh)
             tw = 0.55 + 0.45 * math.sin(t * (2.2 + layer * 0.9) + phase)
             a = max(20, min(255, int(base_alpha * tw)))
             self._pg.draw.circle(star_overlay, (*color, a), (x, y), radius)
