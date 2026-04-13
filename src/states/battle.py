@@ -474,15 +474,7 @@ class BattleState(GameState):
         lane_surf.fill((0, 0, 0, 0))
         order_surf.fill((0, 0, 0, 0))
         display_scale = self._display_scale_for_zoom(self._zoom_visual)
-        preview_zoom_factor = self._zoom_visual / max(0.001, self._zoom)
-        # Make sprites/text comparatively larger based on persistent zoom level.
-        sprite_zoom_blend = self._zoom_visual * 0.8 + self._zoom * 0.2
-        sprite_zoom_ratio = sprite_zoom_blend / max(0.001, self._zoom_sprite_ref)
-        if sprite_zoom_ratio >= 1.0:
-            preview_comp = pow(sprite_zoom_ratio, 1.2)
-        else:
-            preview_comp = pow(sprite_zoom_ratio, 0.85)
-        preview_comp = max(0.55, min(1.9, preview_comp))
+        preview_comp = 1.0
         fast_preview = self._zoom_input_idle < 0.22
         drew_void = False
 
@@ -493,6 +485,19 @@ class BattleState(GameState):
             self._map_renderer.set_camera(self._cam_x, self._cam_y)
             self._map_renderer.set_display_scale(display_scale)
             self._map_renderer.render(scene, self.mission.time_elapsed, render_void=False)
+
+            # Derive sprite scaling from actual map on-screen scale after render clamping/fitting.
+            base_display = self._display_scale_for_zoom(self._zoom_sprite_ref)
+            effective_display = math.sqrt(
+                max(1e-6, self._map_renderer._render_scale_x)
+                * max(1e-6, self._map_renderer._render_scale_y)
+            )
+            sprite_zoom_ratio = effective_display / max(1e-6, base_display)
+            if sprite_zoom_ratio >= 1.0:
+                preview_comp = pow(sprite_zoom_ratio, 1.2)
+            else:
+                preview_comp = pow(sprite_zoom_ratio, 0.85)
+            preview_comp = max(0.55, min(1.9, preview_comp))
         else:
             scene.fill((64, 100, 48))
 
