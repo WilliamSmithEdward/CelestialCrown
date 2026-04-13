@@ -223,7 +223,11 @@ class BattleState(GameState):
                        if report.victory
                        else f"Mission lost. {report.party_losses} party losses.")
         if self.engine is not None:
-            self.engine.change_state(TownState(session=self.session, status_message=message))
+            try:
+                self.engine.change_state(TownState(session=self.session, status_message=message))
+            except Exception as exc:
+                # Keep game running and surface transition failure instead of crashing.
+                self.status_message = f"Transition error: {exc}"
 
     def _p(self, wx: float, wy: float) -> tuple:
         """Project world coordinate to screen coordinate (accounts for camera)."""

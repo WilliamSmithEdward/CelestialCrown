@@ -32,6 +32,7 @@ class Menu:
         self.button_height = 70
         self.button_spacing = 90
         self.input_mapper = InputMapper(deadzone=0.45)
+        self._input_mode = "nav"
 
         button_x = x
         button_y = y + title_padding
@@ -63,11 +64,19 @@ class Menu:
             surface.blit(title_surf, title_rect)
 
         for i, button in enumerate(self.buttons):
-            button.draw(surface, self.font, selected=(i == self.selected))
+            focused = (self._input_mode != "mouse" and i == self.selected) or (
+                self._input_mode == "mouse" and button.hover
+            )
+            button.draw(surface, self.font, selected=focused)
 
     def handle_input(self, event: pygame.event.Event) -> Optional[int]:
         """Handle menu input, return selected option or None."""
+        if event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+            self._input_mode = "mouse"
+
         action = self.input_mapper.map_event(event)
+        if action is not None:
+            self._input_mode = "nav"
         if action == InputAction.NAV_UP:
             self._move_selection(-1)
         elif action == InputAction.NAV_DOWN:
@@ -78,6 +87,7 @@ class Menu:
         if event.type == pygame.MOUSEBUTTONDOWN:
             for i, button in enumerate(self.buttons):
                 if button.is_clicked(event.pos):
+                    self.selected = i
                     return i
 
         return None
@@ -86,5 +96,7 @@ class Menu:
         """Update menu interactions and visual state."""
         for i, button in enumerate(self.buttons):
             button.update(mouse_pos, delta_time)
-            if not button.hover and i == self.selected:
+            if self._input_mode == "mouse" and button.hover:
+                self.selected = i
+            if self._input_mode != "mouse" and not button.hover and i == self.selected:
                 button.hover_strength += (0.65 - button.hover_strength) * min(1.0, delta_time * 8.0)

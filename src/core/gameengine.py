@@ -241,10 +241,6 @@ class GameEngine:
                 instance_id = getattr(event, "instance_id", None)
                 if instance_id is not None:
                     self._remove_controller(instance_id)
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    self.running = False
-                    
             # Pass event to current state
             if self.current_state:
                 self.current_state.handle_event(event)
