@@ -65,6 +65,7 @@ class BattleState(GameState):
         self._order_surf = None
         self._render_surf_size: tuple = (0, 0)
         self._text_cache = {}
+        self._show_connection_lines: bool = False
         self._view_origin_x: float = 0.0
         self._view_origin_y: float = 0.0
         self._view_display_scale: float = 1.0
@@ -542,16 +543,17 @@ class BattleState(GameState):
                 if self._point_seg_dist(squad.x, squad.y, sa.x, sa.y, sb.x, sb.y) < 80:
                     hot_lanes.add((a_id, b_id))
 
-        # 3. Lane overlays
-        for a_id, b_id in self.mission.lanes:
-            if a_id not in self.mission.sites or b_id not in self.mission.sites:
-                continue
-            a, b = self.mission.sites[a_id], self.mission.sites[b_id]
-            is_hot = (a_id, b_id) in hot_lanes
-            lc = (200, 80, 60, 140) if is_hot else (220, 190, 120, 70)
-            lw = 4 if is_hot else 3
-            pygame.draw.line(lane_surf, lc, self._p(a.x, a.y), self._p(b.x, b.y), lw)
-        scene.blit(lane_surf, (0, 0))
+        # 3. Lane overlays (optional visual guides)
+        if self._show_connection_lines:
+            for a_id, b_id in self.mission.lanes:
+                if a_id not in self.mission.sites or b_id not in self.mission.sites:
+                    continue
+                a, b = self.mission.sites[a_id], self.mission.sites[b_id]
+                is_hot = (a_id, b_id) in hot_lanes
+                lc = (200, 80, 60, 140) if is_hot else (220, 190, 120, 70)
+                lw = 4 if is_hot else 3
+                pygame.draw.line(lane_surf, lc, self._p(a.x, a.y), self._p(b.x, b.y), lw)
+            scene.blit(lane_surf, (0, 0))
 
         # 4. Threat auras
         self._render_threat_overlays(scene)
@@ -592,7 +594,7 @@ class BattleState(GameState):
                 sel_r = max(16, min(52, int(round(28 * preview_comp))))
                 sel_w = max(1, int(round(2 * preview_comp)))
                 pygame.draw.circle(scene, (255, 240, 80), (sx, sy - 14), sel_r, sel_w)
-            if squad.target_site_id and squad.target_site_id in self.mission.sites:
+            if self._show_connection_lines and squad.target_site_id and squad.target_site_id in self.mission.sites:
                 target = self.mission.sites[squad.target_site_id]
                 lc3 = (120, 190, 255, 150) if squad.owner == 0 else (255, 120, 100, 110)
                 pygame.draw.line(order_surf, lc3,
@@ -602,7 +604,8 @@ class BattleState(GameState):
                 if tag is None:
                     continue
                 scene.blit(tag, (sx - tag.get_width() // 2, sy - 58))
-        scene.blit(order_surf, (0, 0))
+        if self._show_connection_lines:
+            scene.blit(order_surf, (0, 0))
 
         # Scene is already rendered at runtime zoom from the full baked map.
         if not drew_void:
