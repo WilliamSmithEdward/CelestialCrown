@@ -59,6 +59,7 @@ class MapRenderer:
         # Viewport dimensions (set in bake())
         self._screen_w: int = map_def.width
         self._screen_h: int = map_def.height
+        self._detail_scale: float = 1.0
         self._void_brush_cache: Dict[Tuple[int, Tuple[int, int, int], int], Any] = {}
         # Precomputed starfield + dust for the void background.
         rng = random.Random(map_def.seed + 991)
@@ -111,10 +112,11 @@ class MapRenderer:
             max(0.0, float(self._bake_h - screen_h)),
         )
 
-    def bake(self, screen_w: Optional[int] = None, screen_h: Optional[int] = None) -> None:
+    def bake(self, screen_w: Optional[int] = None, screen_h: Optional[int] = None, detail_scale: float = 1.0) -> None:
         """Render all static layers onto a cached Surface of size (world * scale)."""
         sw = screen_w or self._def.width
         sh = screen_h or self._def.height
+        self._detail_scale = max(0.15, min(1.0, float(detail_scale)))
         self._screen_w = sw
         self._screen_h = sh
         s = self._effective_scale()
@@ -445,13 +447,13 @@ class MapRenderer:
 
         # Two-pass organic scatter over the full bake surface
         area = bw * bh
-        for _ in range(int(area / 1200)):
+        for _ in range(int((area / 1200) * self._detail_scale)):
             x = int(rng.uniform(x0, x0 + bw))
             y = int(rng.uniform(y0, y0 + bh))
             r = rng.randint(18, 52)
             c = _lerp(b, lt if rng.random() < 0.5 else dk, rng.random() * 0.18)
             pg.draw.circle(surf, c, (x, y), r)
-        for _ in range(int(area / 160)):
+        for _ in range(int((area / 160) * self._detail_scale)):
             x = int(rng.uniform(x0, x0 + bw))
             y = int(rng.uniform(y0, y0 + bh))
             r = rng.randint(2, 7)
@@ -473,7 +475,7 @@ class MapRenderer:
 
         # Organic scatter inside rect
         area = max(1, bw * bh)
-        for _ in range(int(area / 260)):
+        for _ in range(int((area / 260) * self._detail_scale)):
             rx = int(rng.uniform(bx, bx + bw))
             ry = int(rng.uniform(by, by + bh))
             rr = rng.randint(5, 16)
@@ -498,7 +500,7 @@ class MapRenderer:
         dk = p.get("dark",  (32,  68, 26))
 
         self._pg.draw.circle(surf, b, (pcx, pcy), r)
-        for _ in range(int(r * 0.7)):
+        for _ in range(int(r * 0.7 * self._detail_scale)):
             angle = rng.random() * math.tau
             dist  = rng.random() * r * 0.85
             tx = int(pcx + math.cos(angle) * dist)

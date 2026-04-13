@@ -48,9 +48,18 @@ class BattleState(GameState):
         self._cam_y: float = 0.0
         self._cam_max_x: float = 0.0
         self._cam_max_y: float = 0.0
+        self._cam_vx: float = 0.0
+        self._cam_vy: float = 0.0
         self._zoom: float = 0.95
+        self._zoom_visual: float = 0.95
+        self._zoom_target: float = 0.95
         self._zoom_min: float = 0.55
         self._zoom_max: float = 1.45
+        self._zoom_settle_accum: float = 0.0
+        self._zoom_full_rebake_pending: bool = False
+        self._zoom_full_rebake_t: float = 0.0
+        self._zoom_full_rebake_delay: float = 0.22
+        self._zoom_anchor_screen: Optional[tuple] = None
         # Which edges are currently being scrolled: [left, right, up, down]
         self._scroll_flags: List[bool] = [False, False, False, False]
         self._screen_size: tuple = (1280, 720)
@@ -115,20 +124,52 @@ class BattleState(GameState):
         self._cam_x = min(self._cam_max_x, max(0.0, focus_x - sw * 0.5))
         self._cam_y = min(self._cam_max_y, max(0.0, focus_y - (sh - _HUD_H) * 0.5))
 
-    def _rebake_for_zoom(self) -> None:
+    def _rebake_for_zoom(self, detail_scale: float = 1.0) -> None:
         if self._map_renderer is None:
             return
         sw, sh = self._screen_size
         hud_h = 54
-        old_center_x = self._cam_x + sw * 0.5
-        old_center_y = self._cam_y + (sh - hud_h) * 0.5
+        if self._zoom_anchor_screen is None:
+            anchor_x = sw * 0.5
+            anchor_y = (sh - hud_h) * 0.5
+        else:
+            anchor_x = max(0.0, min(float(sw - 1), float(self._zoom_anchor_screen[0])))
+            anchor_y = max(0.0, min(float(sh - hud_h - 1), float(self._zoom_anchor_screen[1])))
+        # Preserve world-space focal point across zoom rebakes.
+        old_zoom = self._map_renderer.get_zoom()
+        old_scale = self._map_renderer._scale * old_zoom
+        old_center_x = self._cam_x + anchor_x
+        old_center_y = self._cam_y + anchor_y
+        world_focus_x = (old_center_x - self._map_renderer._pad_x) / max(1e-6, old_scale)
+        world_focus_y = (old_center_y - self._map_renderer._pad_y) / max(1e-6, old_scale)
 
         self._map_renderer.set_zoom(self._zoom)
-        self._map_renderer.bake(sw, sh)
+        self._map_renderer.bake(sw, sh, detail_scale=detail_scale)
         self._cam_max_x, self._cam_max_y = self._map_renderer.cam_max(sw, sh - hud_h)
 
-        self._cam_x = min(self._cam_max_x, max(0.0, old_center_x - sw * 0.5))
-        self._cam_y = min(self._cam_max_y, max(0.0, old_center_y - (sh - hud_h) * 0.5))
+        focus_px_x, focus_px_y = self._map_renderer._wb(world_focus_x, world_focus_y)
+        target_cam_x = min(self._cam_max_x, max(0.0, focus_px_x - anchor_x))
+        target_cam_y = min(self._cam_max_y, max(0.0, focus_px_y - anchor_y))
+
+        # Solve camera directly at the pivot-anchored target and keep visual zoom in sync.
+        self._cam_x = target_cam_x
+        self._cam_y = target_cam_y
+        self._zoom_visual = self._zoom
+        # Avoid residual edge-scroll momentum causing a pop after settle.
+        self._cam_vx = 0.0
+        self._cam_vy = 0.0
+
+    def _rebake_quality_only(self, detail_scale: float = 1.0) -> None:
+        """Rebake visuals without re-centering focus or starting camera handoff."""
+        if self._map_renderer is None:
+            return
+        sw, sh = self._screen_size
+        hud_h = 54
+        self._map_renderer.set_zoom(self._zoom)
+        self._map_renderer.bake(sw, sh, detail_scale=detail_scale)
+        self._cam_max_x, self._cam_max_y = self._map_renderer.cam_max(sw, sh - hud_h)
+        self._cam_x = min(self._cam_max_x, max(0.0, self._cam_x))
+        self._cam_y = min(self._cam_max_y, max(0.0, self._cam_y))
 
     # ------------------------------------------------------------------
     # Helpers
@@ -183,11 +224,17 @@ class BattleState(GameState):
         if not PYGAME_AVAILABLE:
             return
         if event.type == pygame.MOUSEWHEEL:
-            old_zoom = self._zoom
-            self._zoom = max(self._zoom_min, min(self._zoom_max, self._zoom + event.y * 0.1))
-            if abs(self._zoom - old_zoom) > 1e-6:
-                self._rebake_for_zoom()
-                self.status_message = f"Zoom {int(self._zoom * 100)}%"
+            sw, sh = self._screen_size
+            mx, my = pygame.mouse.get_pos()
+            hud_h = 54
+            self._zoom_anchor_screen = (
+                max(0, min(sw - 1, int(mx))),
+                max(0, min(sh - hud_h - 1, int(my))),
+            )
+            self._zoom_target = max(self._zoom_min, min(self._zoom_max, self._zoom_target + event.y * 0.08))
+            self._zoom_full_rebake_pending = False
+            self._zoom_full_rebake_t = 0.0
+            self.status_message = f"Zoom {int(self._zoom_target * 100)}%"
             return
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_SPACE:
@@ -228,24 +275,84 @@ class BattleState(GameState):
                         self.status_message = f"{sel.name} to {self.mission.sites[site_id].name}."
 
     def update(self, delta_time: float) -> None:
-        # Edge-scroll: update camera from mouse position (works even while paused).
+        # High-FPS zoom preview: animate visual zoom every frame, rebake only once on settle.
+        if abs(self._zoom_target - self._zoom_visual) > 1e-4:
+            blend = min(1.0, delta_time * 14.0)
+            self._zoom_visual += (self._zoom_target - self._zoom_visual) * blend
+
+        if abs(self._zoom_target - self._zoom) > 1e-4:
+            if abs(self._zoom_target - self._zoom_visual) < 0.003:
+                self._zoom_settle_accum += delta_time
+                if self._zoom_settle_accum >= 0.08:
+                    self._zoom = self._zoom_target
+                    # First rebake at reduced detail to minimize settle hitch.
+                    self._rebake_for_zoom(detail_scale=0.42)
+                    self._zoom_full_rebake_pending = True
+                    self._zoom_full_rebake_t = 0.0
+                    self._zoom_settle_accum = 0.0
+            else:
+                self._zoom_settle_accum = 0.0
+                self._zoom_full_rebake_pending = False
+                self._zoom_full_rebake_t = 0.0
+        elif self._zoom_full_rebake_pending:
+            if abs(self._zoom_target - self._zoom) > 1e-4:
+                self._zoom_full_rebake_pending = False
+                self._zoom_full_rebake_t = 0.0
+            else:
+                self._zoom_full_rebake_t += delta_time
+                if self._zoom_full_rebake_t >= self._zoom_full_rebake_delay:
+                    self._rebake_quality_only(detail_scale=1.0)
+                    self._zoom_full_rebake_pending = False
+                    self._zoom_full_rebake_t = 0.0
+
+        if abs(self._zoom_target - self._zoom) <= 1e-4 and not self._zoom_full_rebake_pending:
+            self._zoom_anchor_screen = None
+
+        # Edge-scroll with smooth acceleration/deceleration (works while paused).
         if PYGAME_AVAILABLE:
-            _ZONE  = 60      # px from edge that triggers scrolling
-            _SPEED = 520.0   # bake-surface px / sec
+            _ZONE = 72.0
+            _MAX_SPEED = 760.0
+            _HUD_H = 54.0
             sw2, sh2 = self._screen_size
             mx, my = pygame.mouse.get_pos()
-            self._scroll_flags[0] = mx < _ZONE
-            self._scroll_flags[1] = mx > sw2 - _ZONE
-            self._scroll_flags[2] = my < _ZONE
-            self._scroll_flags[3] = my > sh2 - 54 - _ZONE
-            if self._scroll_flags[0]:
-                self._cam_x = max(0.0, self._cam_x - _SPEED * delta_time)
-            if self._scroll_flags[1]:
-                self._cam_x = min(self._cam_max_x, self._cam_x + _SPEED * delta_time)
-            if self._scroll_flags[2]:
-                self._cam_y = max(0.0, self._cam_y - _SPEED * delta_time)
-            if self._scroll_flags[3]:
-                self._cam_y = min(self._cam_max_y, self._cam_y + _SPEED * delta_time)
+
+            left = max(0.0, (_ZONE - mx) / _ZONE)
+            right = max(0.0, (mx - (sw2 - _ZONE)) / _ZONE)
+            up = max(0.0, (_ZONE - my) / _ZONE)
+            down_limit = sh2 - _HUD_H
+            down = max(0.0, (my - (down_limit - _ZONE)) / _ZONE)
+
+            target_vx = (right - left) * _MAX_SPEED
+            target_vy = (down - up) * _MAX_SPEED
+            v_blend = min(1.0, delta_time * 12.0)
+            self._cam_vx += (target_vx - self._cam_vx) * v_blend
+            self._cam_vy += (target_vy - self._cam_vy) * v_blend
+
+            self._scroll_flags[0] = left > 0.05
+            self._scroll_flags[1] = right > 0.05
+            self._scroll_flags[2] = up > 0.05
+            self._scroll_flags[3] = down > 0.05
+
+            self._cam_x += self._cam_vx * delta_time
+            self._cam_y += self._cam_vy * delta_time
+
+            if self._cam_x < 0.0:
+                self._cam_x = 0.0
+                if self._cam_vx < 0.0:
+                    self._cam_vx = 0.0
+            elif self._cam_x > self._cam_max_x:
+                self._cam_x = self._cam_max_x
+                if self._cam_vx > 0.0:
+                    self._cam_vx = 0.0
+
+            if self._cam_y < 0.0:
+                self._cam_y = 0.0
+                if self._cam_vy < 0.0:
+                    self._cam_vy = 0.0
+            elif self._cam_y > self._cam_max_y:
+                self._cam_y = self._cam_max_y
+                if self._cam_vy > 0.0:
+                    self._cam_vy = 0.0
 
         if self.paused:
             return
@@ -276,13 +383,16 @@ class BattleState(GameState):
 
         self._ensure_resources(screen)
         width, height = screen.get_size()
+        scene = pygame.Surface((width, height), pygame.SRCALPHA)
+        preview_zoom_factor = self._zoom_visual / max(0.001, self._zoom)
+        preview_comp = 1.0 / max(0.001, preview_zoom_factor)
 
         # 1. Terrain background (static bake + animated overlays)
         if self._map_renderer is not None:
             self._map_renderer.set_camera(self._cam_x, self._cam_y)
-            self._map_renderer.render(screen, self.mission.time_elapsed)
+            self._map_renderer.render(scene, self.mission.time_elapsed)
         else:
-            screen.fill((64, 100, 48))
+            scene.fill((64, 100, 48))
 
         # 2. Hot-lane detection
         hot_lanes: set = set()
@@ -308,35 +418,43 @@ class BattleState(GameState):
             lc = (200, 80, 60, 140) if is_hot else (220, 190, 120, 70)
             lw = 4 if is_hot else 3
             pygame.draw.line(lane_surf, lc, self._p(a.x, a.y), self._p(b.x, b.y), lw)
-        screen.blit(lane_surf, (0, 0))
+        scene.blit(lane_surf, (0, 0))
 
         # 4. Threat auras
-        self._render_threat_overlays(screen)
+        self._render_threat_overlays(scene)
 
         # 5. Site buildings
         site_ids = self._site_order()
         for idx, site_id in enumerate(site_ids):
             site = self.mission.sites[site_id]
             stype = site.site_type.name if hasattr(site.site_type, "name") else str(site.site_type)
-            sw_s = 80 if stype == "BASE" else (70 if stype in ("FORT", "TEMPLE") else 60)
+            base_sw_s = 80 if stype == "BASE" else (70 if stype in ("FORT", "TEMPLE") else 60)
+            # Keep building sprites visually stable while preview zoom scales the scene.
+            sw_s = int(round(base_sw_s * preview_comp))
+            sw_s = max(42, min(140, sw_s))
             sh_s = sw_s
             bx_s, by_s = self._p(site.x, site.y)
             if self._sprites is not None:
                 building = self._sprites.site_building(stype, site.owner, sw_s, sh_s)
-                screen.blit(building, (bx_s - sw_s // 2, by_s - sh_s + 16))
+                scene.blit(building, (bx_s - sw_s // 2, by_s - sh_s + 16))
             if 0.0 < site.capture_progress < 100.0:
-                self._draw_capture_ring(screen, site)
+                self._draw_capture_ring(scene, site)
             if self.small_font is not None:
                 lc2 = (200, 230, 255) if site.owner == 0 else ((255, 180, 160) if site.owner == 1 else (220, 220, 200))
                 lbl = self.small_font.render(f"{idx + 1} {site.name}", True, lc2)
+                shadow = self.small_font.render(f"{idx + 1} {site.name}", True, (10, 10, 10))
+                if abs(preview_zoom_factor - 1.0) > 0.001:
+                    tw = max(1, int(round(lbl.get_width() * preview_comp)))
+                    th = max(1, int(round(lbl.get_height() * preview_comp)))
+                    lbl = pygame.transform.smoothscale(lbl, (tw, th))
+                    shadow = pygame.transform.smoothscale(shadow, (tw, th))
                 lbl_x = bx_s - lbl.get_width() // 2
                 lbl_y = by_s - sh_s - 6
-                shadow = self.small_font.render(f"{idx + 1} {site.name}", True, (10, 10, 10))
-                screen.blit(shadow, (lbl_x + 1, lbl_y + 1))
-                screen.blit(lbl, (lbl_x, lbl_y))
+                scene.blit(shadow, (lbl_x + 1, lbl_y + 1))
+                scene.blit(lbl, (lbl_x, lbl_y))
 
         # 6. Intercept forecast
-        self._render_intercept_forecast(screen)
+        self._render_intercept_forecast(scene)
 
         # 7. Squad tokens + order lines
         selected = self._selected_squad()
@@ -347,10 +465,14 @@ class BattleState(GameState):
             role_name = squad.role.value if hasattr(squad.role, "value") else "assault"
             sx, sy = self._p(squad.x, squad.y)
             if self._sprites is not None:
-                token = self._sprites.squad_token(squad.owner, role_name, 44, 50)
-                screen.blit(token, (sx - 22, sy - 40))
+                tok_w = max(30, min(88, int(round(44 * preview_comp))))
+                tok_h = max(34, min(100, int(round(50 * preview_comp))))
+                token = self._sprites.squad_token(squad.owner, role_name, tok_w, tok_h)
+                scene.blit(token, (sx - tok_w // 2, sy - int(tok_h * 0.8)))
             if selected is not None and squad.id == selected.id:
-                pygame.draw.circle(screen, (255, 240, 80), (sx, sy - 14), 28, 2)
+                sel_r = max(16, min(52, int(round(28 * preview_comp))))
+                sel_w = max(1, int(round(2 * preview_comp)))
+                pygame.draw.circle(scene, (255, 240, 80), (sx, sy - 14), sel_r, sel_w)
             if squad.target_site_id and squad.target_site_id in self.mission.sites:
                 target = self.mission.sites[squad.target_site_id]
                 lc3 = (120, 190, 255, 150) if squad.owner == 0 else (255, 120, 100, 110)
@@ -358,8 +480,40 @@ class BattleState(GameState):
                                  (sx, sy - 14), self._p(target.x, target.y), 1)
             if self.small_font is not None and selected is not None and squad.id == selected.id:
                 tag = self.small_font.render(squad.name, True, (255, 240, 140))
-                screen.blit(tag, (sx - tag.get_width() // 2, sy - 58))
-        screen.blit(order_surf, (0, 0))
+                if abs(preview_zoom_factor - 1.0) > 0.001:
+                    tw = max(1, int(round(tag.get_width() * preview_comp)))
+                    th = max(1, int(round(tag.get_height() * preview_comp)))
+                    tag = pygame.transform.smoothscale(tag, (tw, th))
+                scene.blit(tag, (sx - tag.get_width() // 2, sy - 58))
+        scene.blit(order_surf, (0, 0))
+
+        # Composite scene with smooth visual zoom around viewport center.
+        screen.fill((0, 0, 0))
+        zoom_factor = self._zoom_visual / max(0.001, self._zoom)
+        hud_h = 54
+        if self._zoom_anchor_screen is None:
+            pivot_x = width * 0.5
+            pivot_y = (height - hud_h) * 0.5
+        else:
+            pivot_x = max(0.0, min(float(width - 1), float(self._zoom_anchor_screen[0])))
+            pivot_y = max(0.0, min(float(height - hud_h - 1), float(self._zoom_anchor_screen[1])))
+        delta = abs(zoom_factor - 1.0)
+        if delta < 0.00001:
+            screen.blit(scene, (0, 0))
+        else:
+            zw = max(1, int(width * zoom_factor))
+            zh = max(1, int(height * zoom_factor))
+            scaled_scene = pygame.transform.smoothscale(scene, (zw, zh))
+            ox = int(round(pivot_x - pivot_x * zoom_factor))
+            oy = int(round(pivot_y - pivot_y * zoom_factor))
+            # Crossfade to avoid a hard visual handoff when zoom_factor approaches 1.0.
+            if delta < 0.03:
+                mix = max(0.0, min(1.0, delta / 0.03))
+                screen.blit(scene, (0, 0))
+                scaled_scene.set_alpha(int(255 * mix))
+                screen.blit(scaled_scene, (ox, oy))
+            else:
+                screen.blit(scaled_scene, (ox, oy))
 
         # 8. HUD
         self._render_hud(screen, width, height)
