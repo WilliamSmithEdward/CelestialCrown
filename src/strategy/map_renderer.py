@@ -49,6 +49,11 @@ class MapRenderer:
         # Camera offset in bake-surface pixels (set each frame via set_camera)
         self._cam_x: float = 0.0
         self._cam_y: float = 0.0
+        self._display_scale: float = 1.0
+        self._render_origin_x: float = 0.0
+        self._render_origin_y: float = 0.0
+        self._render_scale_x: float = 1.0
+        self._render_scale_y: float = 1.0
         # Baked surface dimensions (set in bake())
         self._bake_w: int = map_def.width
         self._bake_h: int = map_def.height
@@ -97,6 +102,14 @@ class MapRenderer:
         s = self._effective_scale()
         return (wx * s + self._pad_x - self._cam_x, wy * s + self._pad_y - self._cam_y)
 
+    def project_display(self, wx: float, wy: float) -> Tuple[float, float]:
+        """Convert world coordinates to actual current on-screen coordinates."""
+        bx, by = self._wb(wx, wy)
+        return (
+            (bx - self._render_origin_x) * self._render_scale_x,
+            (by - self._render_origin_y) * self._render_scale_y,
+        )
+
     def set_zoom(self, zoom: float) -> None:
         """Set map zoom factor used for baking and projection."""
         self._zoom = max(0.4, min(2.5, float(zoom)))
@@ -108,6 +121,10 @@ class MapRenderer:
         """Set camera scroll offset (bake-surface pixels)."""
         self._cam_x = cam_x
         self._cam_y = cam_y
+
+    def set_display_scale(self, display_scale: float) -> None:
+        """Set runtime display scale relative to baked pixels."""
+        self._display_scale = max(1e-4, float(display_scale))
 
     def cam_max(self, screen_w: int, screen_h: int) -> Tuple[float, float]:
         """Return (max_cam_x, max_cam_y) for clamping the camera scroll."""
@@ -156,8 +173,21 @@ class MapRenderer:
             self._render_void_background(screen, time_elapsed)
         if self._static_surf is None:
             return
-        cx, cy = int(self._cam_x), int(self._cam_y)
-        screen.blit(self._static_surf, (-cx, -cy))
+        sw, sh = screen.get_size()
+        src_w = min(self._bake_w, max(1, int(math.ceil(sw / self._display_scale))))
+        src_h = min(self._bake_h, max(1, int(math.ceil(sh / self._display_scale))))
+        cx = int(min(max(0.0, self._cam_x), max(0.0, self._bake_w - src_w)))
+        cy = int(min(max(0.0, self._cam_y), max(0.0, self._bake_h - src_h)))
+        self._render_origin_x = float(cx)
+        self._render_origin_y = float(cy)
+        self._render_scale_x = sw / max(1.0, float(src_w))
+        self._render_scale_y = sh / max(1.0, float(src_h))
+        view = self._static_surf.subsurface((cx, cy, src_w, src_h))
+        if src_w == sw and src_h == sh:
+            screen.blit(view, (0, 0))
+        else:
+            scaled = self._pg.transform.smoothscale(view, (sw, sh))
+            screen.blit(scaled, (0, 0))
         for layer in self._def.layers:
             if layer.animated:
                 self._render_animated_layer(screen, layer, time_elapsed)
@@ -615,8 +645,11 @@ class MapRenderer:
         speed = float(p.get("shimmer_speed", 55.0))
 
         # Apply camera offset to produce screen-space points
-        cx, cy = int(self._cam_x), int(self._cam_y)
-        screen_pts = [(bx - cx, by - cy) for bx, by in smoothed]
+        ox = self._render_origin_x
+        oy = self._render_origin_y
+        sx = self._render_scale_x
+        sy = self._render_scale_y
+        screen_pts = [((bx - ox) * sx, (by - oy) * sy) for bx, by in smoothed]
 
         # Arc-length parameterisation for evenly-spaced dashes
         lengths = [0.0]
