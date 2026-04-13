@@ -44,6 +44,29 @@ def test_mission_complete_when_enemy_base_captured() -> None:
     assert result == "victory"
 
 
+def test_mission_defeat_when_player_base_captured_by_default() -> None:
+    mission = create_default_mission(chapter=1)
+    player_base = mission.sites["player_base"]
+
+    player_base.owner = 1
+    complete, result = mission.is_complete()
+
+    assert complete is True
+    assert result == "defeat"
+
+
+def test_mission_not_defeat_when_player_base_captured_with_override() -> None:
+    mission = create_default_mission(chapter=1)
+    mission.ignore_player_base_defeat = True
+    player_base = mission.sites["player_base"]
+
+    player_base.owner = 1
+    complete, result = mission.is_complete()
+
+    assert complete is False
+    assert result == ""
+
+
 def test_income_reflects_controlled_sites() -> None:
     mission = create_default_mission(chapter=1)
     for site in mission.sites.values():

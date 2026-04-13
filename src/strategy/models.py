@@ -104,6 +104,7 @@ class StrategicMission:
     enemy_income: int = 0
     pressure_index: float = 0.0
     last_engagement: Optional[EngagementReport] = None
+    ignore_player_base_defeat: bool = False
 
     capture_radius: float = 52.0
     collision_radius: float = 36.0
@@ -238,7 +239,7 @@ class StrategicMission:
 
         if enemy_base is not None and enemy_base.owner == 0:
             return True, "victory"
-        if player_base is not None and player_base.owner == 1:
+        if (not self.ignore_player_base_defeat) and player_base is not None and player_base.owner == 1:
             return True, "defeat"
         if not enemy_alive:
             return True, "victory"

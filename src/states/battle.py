@@ -16,6 +16,7 @@ class BattleState(GameState):
     """Squad-based strategic map with terrain background, building sprites, and squad tokens."""
 
     _SCENARIO_ID = "ch1_asterhold_gate"
+    _IGNORE_DEFEAT_FOR_TESTING = True
 
     def __init__(self, session: CampaignSession | None = None):
         super().__init__()
@@ -24,6 +25,8 @@ class BattleState(GameState):
 
         from ..strategy.mission_loader import load_mission
         self.mission = load_mission(self._SCENARIO_ID, chapter=self.session.chapter)
+        # Testing override: keep battle running even if enemy captures player base.
+        self.mission.ignore_player_base_defeat = True
         player_squads = self.session.build_player_squads()
         base_site = self.mission.sites.get("player_base")
         base_x = base_site.x if base_site else 120.0
@@ -258,7 +261,10 @@ class BattleState(GameState):
                                    f"Losses {r.losses_a}-{r.losses_b}")
         complete, result = self.mission.is_complete()
         if complete:
-            self._return_to_town(result, "Mission complete.", True)
+            if result == "defeat" and self._IGNORE_DEFEAT_FOR_TESTING:
+                self.status_message = "Testing mode: defeat ignored. Continue simulation."
+            else:
+                self._return_to_town(result, "Mission complete.", True)
 
     # ------------------------------------------------------------------
     # Render
